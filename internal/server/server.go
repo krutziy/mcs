@@ -21,12 +21,19 @@ import (
 
 // Config 是服务端配置（config.json）。
 type Config struct {
-	Port     int    `json:"port"`
-	MOTD     string `json:"motd"`
-	MaxPlayers int32 `json:"max_players"`
-	ViewDistance int32 `json:"view_distance"`
-	Spawn    [3]float64 `json:"spawn"`
-	GameMode string `json:"gamemode"`
+	Port         int         `json:"port"`
+	MOTD         string      `json:"motd"`
+	MaxPlayers   int32       `json:"max_players"`
+	ViewDistance int32       `json:"view_distance"`
+	Spawn        [3]float64  `json:"spawn"`
+	GameMode     string      `json:"gamemode"`
+	World        WorldConfig `json:"world"`
+}
+
+// WorldConfig 世界配置。
+type WorldConfig struct {
+	Type string `json:"type"` // flat | noise
+	Seed int64  `json:"seed"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -38,6 +45,7 @@ func DefaultConfig() Config {
 		ViewDistance: 3,
 		Spawn:        [3]float64{8, -60, 8},
 		GameMode:     "creative",
+		World:        WorldConfig{Type: "flat", Seed: 20261010},
 	}
 }
 
@@ -72,6 +80,8 @@ func New(cfg Config) (*Server, error) {
 		GameMode:     mode,
 		MOTD:         cfg.MOTD,
 		MaxPlayers:   cfg.MaxPlayers,
+		WorldType:    cfg.World.Type,
+		WorldSeed:    cfg.World.Seed,
 	}, suite)
 	return &Server{cfg: cfg, ver: ver, suite: suite, game: g}, nil
 }

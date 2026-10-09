@@ -1,8 +1,12 @@
 {
   "port": 25565,
-  "motd": "§aGo MC 框架 §7| 小游戏定制服务端",
+  "motd": "§aGo MC 框架 §7| 通用服务端底座",
   "max_players": 20,
   "view_distance": 3,
   "spawn": [8, -60, 8],
-  "gamemode": "creative"
+  "gamemode": "creative",
+  "world": {
+    "type": "flat",
+    "seed": 20261010
+  }
 }

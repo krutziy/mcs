@@ -11,6 +11,7 @@ import (
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
 	"mcserver/internal/version"
+	"mcserver/internal/world"
 )
 
 // Config 是游戏层配置。
@@ -20,6 +21,8 @@ type Config struct {
 	GameMode               packet.GameMode
 	MOTD                   string
 	MaxPlayers             int32
+	WorldType              string // "flat" | "noise"
+	WorldSeed              int64
 }
 
 // Game 聚合全部游戏状态，由主循环独占访问。
@@ -41,7 +44,7 @@ type Game struct {
 	clockID  int32 // 白天时钟 ID（官方录制为 1）
 
 	registryBodies [][]byte
-	chunkTemplate  []byte
+	gen            world.Generator
 
 	closed atomic.Bool
 }
@@ -56,9 +59,17 @@ func New(cfg Config, suite *version.Suite) *Game {
 		joinCh:         make(chan *Session, 64),
 		players:        map[int32]*entity.Player{},
 		registryBodies: assets.Registries(),
-		chunkTemplate:  assets.ChunkTemplate(),
 		dayTime:        6000, // 正午
 		clockID:        1,
+	}
+	switch cfg.WorldType {
+	case "noise":
+		g.gen = world.DefaultNoise(cfg.WorldSeed)
+	default:
+		g.gen = world.FlatGenerator{}
+		if cfg.SpawnY == 0 {
+			g.Cfg.SpawnY = float64(world.MinY + 4)
+		}
 	}
 	g.nextEID.Store(100)
 	go g.run()
@@ -255,7 +266,7 @@ func (g *Game) handleJoin(s *Session) {
 	g.broadcastSystem(fmt.Sprintf("§e%s 加入了游戏", p.Name))
 }
 
-// sendChunks 以指定区块为中心，成批发送平坦世界区块。
+// sendChunks 以指定区块为中心，成批发送世界区块。
 func (g *Game) sendChunks(s *Session, cx, cz int32) {
 	r := g.Cfg.ViewDistance
 	s.SendPlay("minecraft:chunk_batch_start", func(w *protocol.Writer) {})
@@ -263,9 +274,11 @@ func (g *Game) sendChunks(s *Session, cx, cz int32) {
 	for dx := -r; dx <= r; dx++ {
 		for dz := -r; dz <= r; dz++ {
 			x, z := cx+dx, cz+dz
-			tpl := g.chunkTemplate
+			ch := world.NewChunk(x, z, 0)
+			g.gen.Generate(ch)
+			body := ch.EncodeBody()
 			s.SendPlay("minecraft:level_chunk_with_light", func(w *protocol.Writer) {
-				packet.WriteLevelChunk(w, x, z, tpl)
+				packet.WriteLevelChunk(w, x, z, body)
 			})
 			n++
 		}
