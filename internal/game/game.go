@@ -58,7 +58,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		events:         make(chan Event, 4096),
 		joinCh:         make(chan *Session, 64),
 		players:        map[int32]*entity.Player{},
-		registryBodies: assets.Registries(),
+		registryBodies: assets.Registries(775), // 兜底；实际按连接版本在 server 层下发
 		dayTime:        6000, // 正午
 		clockID:        1,
 	}
@@ -228,7 +228,11 @@ func (g *Game) handleJoin(s *Session) {
 		packet.WriteSimulationDistance(w, g.Cfg.ViewDistance)
 	})
 	s.SendPlay("minecraft:set_time", func(w *protocol.Writer) {
-		packet.WriteSetTime(w, g.worldAge, []packet.Clock{{ID: g.clockID, TotalTicks: g.dayTime, Rate: 1}})
+		if s.ver.ClassicTime {
+			packet.WriteSetTimeClassic(w, g.worldAge, g.dayTime)
+		} else {
+			packet.WriteSetTime(w, g.worldAge, []packet.Clock{{ID: g.clockID, TotalTicks: g.dayTime, Rate: 1}})
+		}
 	})
 	s.SendPlay("minecraft:set_default_spawn_position", func(w *protocol.Writer) {
 		packet.WriteSpawnPosition(w, int32(g.Cfg.SpawnX), int32(g.Cfg.SpawnY), int32(g.Cfg.SpawnZ), 0, 0)
@@ -276,7 +280,7 @@ func (g *Game) sendChunks(s *Session, cx, cz int32) {
 			x, z := cx+dx, cz+dz
 			ch := world.NewChunk(x, z, 0)
 			g.gen.Generate(ch)
-			body := ch.EncodeBody()
+			body := ch.EncodeBody(world.StyleFor(int32(s.suite.Version)))
 			s.SendPlay("minecraft:level_chunk_with_light", func(w *protocol.Writer) {
 				packet.WriteLevelChunk(w, x, z, body)
 			})
@@ -351,12 +355,18 @@ func (g *Game) broadcastSystem(text string) {
 	}
 }
 
-// broadcastTime 每秒同步时间。
+// broadcastTime 每秒同步时间（按各玩家协议版本选择格式）。
 func (g *Game) broadcastTime() {
 	age, day, cid := g.worldAge, g.dayTime, g.clockID
 	for _, other := range g.players {
+		sess, _ := other.Send.(*Session)
+		classic := sess != nil && sess.ver.ClassicTime
 		other.Send.SendPlay("minecraft:set_time", func(w *protocol.Writer) {
-			packet.WriteSetTime(w, age, []packet.Clock{{ID: cid, TotalTicks: day, Rate: 1}})
+			if classic {
+				packet.WriteSetTimeClassic(w, age, day)
+			} else {
+				packet.WriteSetTime(w, age, []packet.Clock{{ID: cid, TotalTicks: day, Rate: 1}})
+			}
 		})
 	}
 }

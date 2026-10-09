@@ -25,6 +25,7 @@ var (
 	outDir     = flag.String("out", ".tools/captures", "抓包输出目录")
 	username   = flag.String("user", "Recorder", "登录用户名")
 	duration   = flag.Duration("t", 8*time.Second, "游戏阶段录制时长")
+	verName    = flag.String("version", "", "协议版本名（如 26.3 / 1.21.11），默认最新")
 )
 
 // offlineUUID 按离线模式规则（UUID v3 of "OfflinePlayer:<name>"）派生玩家 UUID。
@@ -40,6 +41,17 @@ func offlineUUID(name string) protocol.UUID {
 func main() {
 	flag.Parse()
 	ver := version.Latest()
+	if *verName != "" {
+		p, err := version.Parse(*verName)
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, v := range version.All() {
+			if v.Protocol == p {
+				ver = v
+			}
+		}
+	}
 	suite := version.SuiteFor(ver.Protocol)
 	if suite == nil {
 		log.Fatal("无可用版本套件")
@@ -120,14 +132,14 @@ func main() {
 			sendFinishConf(c, suite)
 			c.SetState(conn.StatePlay)
 			log.Printf("进入游戏状态，录制 %v", *duration)
-			recordPlay(c, suite, &seq)
+			recordPlay(c, suite, ver.Protocol, &seq)
 			return
 		}
 	}
 }
 
 // recordPlay 录制游戏阶段的包，并应答 keepalive/ping/传送确认。
-func recordPlay(c *conn.Conn, suite *version.Suite, seq *int) {
+func recordPlay(c *conn.Conn, suite *version.Suite, proto version.Protocol, seq *int) {
 	deadline := time.Now().Add(*duration)
 	var pendingTeleport int32 = -1
 	walk := os.Getenv("WALK") == "1"
@@ -171,13 +183,25 @@ func recordPlay(c *conn.Conn, suite *version.Suite, seq *int) {
 				w.Int64(payload)
 			})
 		case "minecraft:player_position":
+			// 26.1+: tid + pos(3×f64) + vel(3×f64) + yaw/pitch(f32) + flags(4B)
 			teleportID := r.VarInt()
+			px, py, pz := r.Double(), r.Double(), r.Double()
+			_ = r.FixedBytes(24) // 速度增量
+			yaw, pitch := r.Float(), r.Float()
+			_ = r.FixedBytes(4) // flags
 			pendingTeleport = teleportID
-			// 其余字段：x/y/z、速度增量、yaw/pitch、flags —— 先原始保留
+			echoPos := proto >= 777 // 26.3 起确认包回显位置与朝向
 			c.WritePacket(suite.MustID("play", "serverbound", "minecraft:accept_teleportation"), func(w *protocol.Writer) {
 				w.VarInt(pendingTeleport)
+				if echoPos {
+					w.Double(px)
+					w.Double(py)
+					w.Double(pz)
+					w.Float(yaw)
+					w.Float(pitch)
+				}
 			})
-			log.Printf("已确认传送 %d", teleportID)
+			log.Printf("已确认传送 %d pos=(%.1f,%.1f,%.1f)", teleportID, px, py, pz)
 		}
 	}
 	log.Printf("录制完成，共 %d 个包", *seq)

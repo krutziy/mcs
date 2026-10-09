@@ -1,22 +1,30 @@
 // Package version 实现多版本兼容的核心抽象：每个协议版本对应一个
-// Suite（包 ID 注册表 + 差异化编解码钩子）。握手包中的协议号用于查表，
-// 服务器核心逻辑只面向 Suite 接口编写，新增版本 = 新增一份 ID 表。
+// Suite（包 ID 注册表 + 差异化行为标志）。握手包中的协议号用于查表，
+// 服务器核心逻辑只面向 Suite 编写，新增版本 = 新增一份 ID 表 + 差异标志。
 package version
 
 import "fmt"
 
-// Protocol 是协议版本号（如 775 = 26.1）。
+// Protocol 是协议版本号。
 type Protocol int32
 
-// Version 描述一个受支持的协议版本。
+// Version 描述一个受支持的协议版本及其差异化行为。
 type Version struct {
 	Protocol Protocol
-	Name     string // 显示名，如 "26.1"
+	Name     string // 显示名
+
+	// ConfirmEchoesPos: 26.3(777) 起 accept_teleportation 回显位置与朝向
+	ConfirmEchoesPos bool
+	// ClassicTime: 1.21.x 的经典 set_time（age+timeOfDay+尾字节）而非 26.x 时钟列表
+	ClassicTime bool
 }
 
 // 支持的版本列表（新增版本时在此登记并添加对应的包 ID 表）。
 var supported = []Version{
-	{775, "26.1"},
+	{Protocol: 774, Name: "1.21.11", ClassicTime: true},
+	{Protocol: 775, Name: "26.1"},
+	{Protocol: 776, Name: "26.2"},
+	{Protocol: 777, Name: "26.3", ConfirmEchoesPos: true},
 }
 
 // Lookup 按协议号查找受支持的版本。
@@ -47,15 +55,14 @@ func Parse(name string) (Protocol, error) {
 
 // StateAndDir 标识一个包 ID 表的归属（状态 × 方向）。
 type StateAndDir struct {
-	State string // handshake/status/login/configuration/play
-	To    string // clientbound/serverbound
+	State string
+	To    string
 }
 
 // Suite 是某个协议版本的包 ID 集合，键为官方包名（如 "minecraft:registry_data"）。
 type Suite struct {
 	Version Protocol
-	// IDs[state][direction][packetName] = packetID
-	IDs map[string]map[string]map[string]int32
+	IDs     map[string]map[string]map[string]int32
 }
 
 // ID 返回指定包的 ID。
@@ -81,11 +88,17 @@ func (s *Suite) MustID(state, dir, packet string) int32 {
 	return id
 }
 
-// SuiteFor 返回指定协议版本的 Suite（目前每个版本一张表）。
+// SuiteFor 返回指定协议版本的 Suite。
 func SuiteFor(p Protocol) *Suite {
 	switch p {
+	case 774:
+		return suite774
 	case 775:
 		return suite775
+	case 776:
+		return suite776
+	case 777:
+		return suite777
 	}
 	return nil
 }

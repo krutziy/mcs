@@ -17,6 +17,7 @@ import (
 type Session struct {
 	conn  *conn.Conn
 	suite *version.Suite
+	ver   version.Version // 协议版本（含差异化行为标志）
 	game  *Game
 
 	name   string
@@ -28,7 +29,8 @@ type Session struct {
 
 // NewSession 创建游戏会话（配置阶段完成后由 server 层调用）。
 func NewSession(c *conn.Conn, suite *version.Suite, g *Game, name string, uuid protocol.UUID) *Session {
-	return &Session{conn: c, suite: suite, game: g, name: name, uuid: uuid}
+	ver, _ := version.Lookup(suite.Version)
+	return &Session{conn: c, suite: suite, ver: ver, game: g, name: name, uuid: uuid}
 }
 
 // PlayerName 返回玩家名。
@@ -113,7 +115,11 @@ func (s *Session) PlayLoop() {
 		case "minecraft:keep_alive":
 			s.game.Submit(&playerKeepAliveEvent{p: p, id: pr.Int64()})
 		case "minecraft:accept_teleportation":
-			s.game.Submit(&playerTeleportConfirmEvent{p: p, id: pr.VarInt()})
+			id := pr.VarInt()
+			if s.ver.ConfirmEchoesPos { // 26.3+：回显的位置与朝向（读取并忽略）
+				_ = pr.FixedBytes(24 + 8)
+			}
+			s.game.Submit(&playerTeleportConfirmEvent{p: p, id: id})
 		case "minecraft:chat":
 			msg := packet.ReadChatMessage(pr)
 			s.game.Submit(&playerChatEvent{p: p, msg: msg.Content})

@@ -320,3 +320,10 @@ func WriteTeleportEntity(w *protocol.Writer, entityID int32, x, y, z, vx, vy, vz
 	w.FixedBytes([]byte{0, 0, 0, 0}) // flags：绝对
 	w.Bool(onGround)
 }
+
+// WriteSetTimeClassic 写入 1.21.x 的 set_time 包：世界年龄 + 一天内时间 + 尾字节。
+func WriteSetTimeClassic(w *protocol.Writer, worldAge, timeOfDay int64) {
+	w.Int64(worldAge)
+	w.Int64(timeOfDay)
+	w.Uint8(1) // 官方如此（疑似昼夜循环开关）
+}

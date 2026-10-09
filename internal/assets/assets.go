@@ -1,24 +1,26 @@
-// Package assets 内嵌从官方 26.1 服务端录制的关键字节数据：
-//   - registry_*.bin       configuration 阶段 registry_data 包体（id-only 条目，
-//                          依赖客户端回显 minecraft:core 已知包）
-//   - chunk_template.bin   平坦世界 level_chunk_with_light 包体（去掉坐标前缀），
-//                          所有区块内容相同，可按任意坐标复用
-//   - known_packs.bin      select_known_packs 包体
+// Package assets 内嵌各支持协议版本的关键字节数据（用 cmd/recorder 从官方
+// 服务端录制，方法见 README）：
 //
-// 录制方法见 README（用 cmd/recorder 连接官方服务端抓包）。
+//	data/<proto>/registry_XX.bin  configuration 阶段 registry_data 包体
+//	                             （id-only 条目，依赖客户端回显 minecraft:core）
+//	data/<proto>/known_packs.bin  select_known_packs 包体
+//	data/chunk_template.bin       26.1 平坦世界区块包体（黄金测试基准）
 package assets
 
 import (
 	"embed"
+	"fmt"
 	"sort"
+	"strconv"
 )
 
-//go:embed data/*.bin
+//go:embed data
 var files embed.FS
 
-// Registries 返回全部 registry_data 包体（按文件名排序）。
-func Registries() [][]byte {
-	entries, err := files.ReadDir("data")
+// Registries 返回指定协议版本的 registry_data 包体列表（按序）。
+func Registries(proto int32) [][]byte {
+	dir := fmt.Sprintf("data/%d", proto)
+	entries, err := files.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
@@ -29,23 +31,33 @@ func Registries() [][]byte {
 			names = append(names, n)
 		}
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool {
+		a, _ := strconv.Atoi(names[i][9 : len(names[i])-4])
+		b, _ := strconv.Atoi(names[j][9 : len(names[j])-4])
+		return a < b
+	})
 	out := make([][]byte, 0, len(names))
 	for _, n := range names {
-		b, _ := files.ReadFile("data/" + n)
+		b, _ := files.ReadFile(dir + "/" + n)
 		out = append(out, b)
 	}
 	return out
 }
 
-// ChunkTemplate 返回平坦世界区块包体（不含坐标前缀）。
+// KnownPacks 返回指定协议版本的 select_known_packs 包体。
+func KnownPacks(proto int32) []byte {
+	b, _ := files.ReadFile(fmt.Sprintf("data/%d/known_packs.bin", proto))
+	return b
+}
+
+// ChunkTemplate 返回 26.1 平坦世界区块包体（不含坐标前缀），黄金测试用。
 func ChunkTemplate() []byte {
 	b, _ := files.ReadFile("data/chunk_template.bin")
 	return b
 }
 
-// KnownPacks 返回 select_known_packs 包体。
-func KnownPacks() []byte {
-	b, _ := files.ReadFile("data/known_packs.bin")
-	return b
+// ChunkTemplate774 返回 1.21.11 平坦世界区块包体（含坐标前缀），黄金测试用。
+func ChunkTemplate774() []byte {
+	b, _ := files.ReadFile("data/chunk_template_774.bin")
+	return b[8:] // 去掉坐标
 }

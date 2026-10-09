@@ -128,10 +128,11 @@ func (s *Server) handleConn(tcp net.Conn) {
 	_ = r.Uint16() // port
 	nextState := r.VarInt()
 
-	if protoVer != int32(s.ver.Protocol) {
-		// 版本不匹配：status 请求仍返回列表信息以便客户端提示；登录则踢出
+	// 多版本：握手协议号决定本次连接使用的版本套件
+	ver, ok := version.Lookup(version.Protocol(protoVer))
+	if !ok {
 		if nextState == 1 {
-			s.handleStatus(c, true)
+			s.handleStatus(c, version.Version{Protocol: version.Protocol(protoVer)}, true)
 		} else {
 			c.SetState(conn.StateLogin)
 			s.rejectLogin(c, protoVer)
@@ -139,15 +140,16 @@ func (s *Server) handleConn(tcp net.Conn) {
 		c.Close()
 		return
 	}
+	suite := version.SuiteFor(ver.Protocol)
 
 	switch nextState {
 	case 1:
 		c.SetState(conn.StateStatus)
-		s.handleStatus(c, false)
+		s.handleStatus(c, ver, false)
 		c.Close()
 	case 2:
 		c.SetState(conn.StateLogin)
-		s.handleLogin(c)
+		s.handleLogin(c, ver, suite)
 	}
 }
 
@@ -169,7 +171,7 @@ type statusResponse struct {
 }
 
 // handleStatus 处理服务器列表 ping。
-func (s *Server) handleStatus(c *conn.Conn, wrongVersion bool) {
+func (s *Server) handleStatus(c *conn.Conn, ver version.Version, wrongVersion bool) {
 	id, r, err := c.ReadPacket()
 	if err != nil {
 		return
@@ -177,11 +179,11 @@ func (s *Server) handleStatus(c *conn.Conn, wrongVersion bool) {
 	switch id {
 	case s.suite.MustID("status", "serverbound", "minecraft:status_request"):
 		resp := statusResponse{}
-		resp.Version.Name = s.ver.Name + " (Go)"
+		resp.Version.Name = ver.Name + " / 支持 " + s.versionsString()
 		if wrongVersion {
 			resp.Version.Protocol = -1 // 触发客户端版本不匹配提示
 		} else {
-			resp.Version.Protocol = int32(s.ver.Protocol)
+			resp.Version.Protocol = int32(ver.Protocol)
 		}
 		resp.Players.Max = s.cfg.MaxPlayers
 		resp.Players.Online = int32(0) // 由状态查询补充
@@ -199,6 +201,18 @@ func (s *Server) handleStatus(c *conn.Conn, wrongVersion bool) {
 	_ = r
 }
 
+// versionsString 返回受支持版本列表（状态响应用）。
+func (s *Server) versionsString() string {
+	names := ""
+	for _, v := range version.All() {
+		if names != "" {
+			names += " / "
+		}
+		names += v.Name
+	}
+	return names
+}
+
 // rejectLogin 拒绝不支持的协议版本。
 func (s *Server) rejectLogin(c *conn.Conn, got int32) {
 	msg := fmt.Sprintf(`{"text":"不支持的协议版本 %d，本服运行 %s (%d)"}`, got, s.ver.Name, s.ver.Protocol)
@@ -208,13 +222,13 @@ func (s *Server) rejectLogin(c *conn.Conn, got int32) {
 }
 
 // handleLogin 处理离线登录 → 配置 → 进入游戏。
-func (s *Server) handleLogin(c *conn.Conn) {
+func (s *Server) handleLogin(c *conn.Conn, ver version.Version, suite *version.Suite) {
 	id, r, err := c.ReadPacket()
 	if err != nil {
 		c.Close()
 		return
 	}
-	if id != s.suite.MustID("login", "serverbound", "minecraft:hello") {
+	if id != suite.MustID("login", "serverbound", "minecraft:hello") {
 		c.Close()
 		return
 	}
@@ -230,41 +244,36 @@ func (s *Server) handleLogin(c *conn.Conn) {
 	uuid := offlineUUID(start.Username)
 
 	// 启用压缩（先发压缩包再发成功包，顺序不能反）
-	c.WritePacket(s.suite.MustID("login", "clientbound", "minecraft:login_compression"), func(w *protocol.Writer) {
+	c.WritePacket(suite.MustID("login", "clientbound", "minecraft:login_compression"), func(w *protocol.Writer) {
 		packet.WriteSetCompression(w, 256)
 	})
 	c.SetCompression(256)
 
-	c.WritePacket(s.suite.MustID("login", "clientbound", "minecraft:login_finished"), func(w *protocol.Writer) {
+	c.WritePacket(suite.MustID("login", "clientbound", "minecraft:login_finished"), func(w *protocol.Writer) {
 		packet.WriteLoginFinished(w, uuid, start.Username)
 	})
 
 	// 等待 login_acknowledged
-	if !awaitPacket(c, s.suite.MustID("login", "serverbound", "minecraft:login_acknowledged")) {
+	if !awaitPacket(c, suite.MustID("login", "serverbound", "minecraft:login_acknowledged")) {
 		c.Close()
 		return
 	}
 	c.SetState(conn.StateConfiguration)
-	s.handleConfiguration(c, start.Username, uuid)
+	s.handleConfiguration(c, ver, suite, start.Username, uuid)
 }
 
 // handleConfiguration 处理配置阶段：known packs 回显 → 注册表 → 完成配置。
-func (s *Server) handleConfiguration(c *conn.Conn, name string, uuid protocol.UUID) {
+func (s *Server) handleConfiguration(c *conn.Conn, ver version.Version, suite *version.Suite, name string, uuid protocol.UUID) {
 	// 请求已知包：真实客户端会回显 minecraft:core，从而允许注册表只发条目名
-	knownPacks := s.suite.MustID("configuration", "clientbound", "minecraft:select_known_packs")
+	knownPacks := suite.MustID("configuration", "clientbound", "minecraft:select_known_packs")
 	c.WritePacket(knownPacks, func(w *protocol.Writer) {
-		w.RawBytes(s.knownPacksBody())
+		w.RawBytes(assets.KnownPacks(int32(ver.Protocol)))
 	})
 
 	hasCore := false
-	registryIDs := map[int32]bool{
-		s.suite.MustID("configuration", "serverbound", "minecraft:select_known_packs"): false,
-		s.suite.MustID("configuration", "serverbound", "minecraft:finish_configuration"): false,
-		s.suite.MustID("configuration", "serverbound", "minecraft:keep_alive"):          false,
-	}
-	registryDataID := s.suite.MustID("configuration", "clientbound", "minecraft:registry_data")
-	finishID := s.suite.MustID("configuration", "clientbound", "minecraft:finish_configuration")
-	keepAliveOut := s.suite.MustID("configuration", "clientbound", "minecraft:keep_alive")
+	registryDataID := suite.MustID("configuration", "clientbound", "minecraft:registry_data")
+	finishID := suite.MustID("configuration", "clientbound", "minecraft:finish_configuration")
+	keepAliveOut := suite.MustID("configuration", "clientbound", "minecraft:keep_alive")
 	_ = keepAliveOut
 
 	for {
@@ -276,7 +285,7 @@ func (s *Server) handleConfiguration(c *conn.Conn, name string, uuid protocol.UU
 		body := r.Rest()
 		pr := protocol.NewReader(body)
 		switch id {
-		case s.suite.MustID("configuration", "serverbound", "minecraft:select_known_packs"):
+		case suite.MustID("configuration", "serverbound", "minecraft:select_known_packs"):
 			packs := packet.ReadSelectKnownPacks(pr)
 			for _, p := range packs {
 				if p.Namespace == "minecraft" && p.ID == "core" {
@@ -285,12 +294,12 @@ func (s *Server) handleConfiguration(c *conn.Conn, name string, uuid protocol.UU
 			}
 			log.Printf("[server] %s known packs: %d 项 (core=%v)", name, len(packs), hasCore)
 			if !hasCore {
-				s.rejectConf(c, "本服需要客户端内置原版数据包（minecraft:core）")
+				s.rejectConf(c, suite, "本服需要客户端内置原版数据包（minecraft:core）")
 				c.Close()
 				return
 			}
-			// 复用官方注册表包体（id-only 条目）
-			for _, rb := range s.gameRegistryBodies() {
+			// 复用官方注册表包体（id-only 条目，按版本）
+			for _, rb := range assets.Registries(int32(ver.Protocol)) {
 				c.WritePacket(registryDataID, func(w *protocol.Writer) {
 					w.RawBytes(rb)
 				})
@@ -298,30 +307,29 @@ func (s *Server) handleConfiguration(c *conn.Conn, name string, uuid protocol.UU
 			c.WritePacket(finishID, func(w *protocol.Writer) {
 				packet.WriteFinishConfiguration(w)
 			})
-		case s.suite.MustID("configuration", "serverbound", "minecraft:finish_configuration"):
+		case suite.MustID("configuration", "serverbound", "minecraft:finish_configuration"):
 			c.SetState(conn.StatePlay)
-			sess := game.NewSession(c, s.suite, s.game, name, uuid)
+			sess := game.NewSession(c, suite, s.game, name, uuid)
 			go sess.PlayLoop()
 			return
-		case s.suite.MustID("configuration", "serverbound", "minecraft:keep_alive"):
+		case suite.MustID("configuration", "serverbound", "minecraft:keep_alive"):
 			ka := pr.Int64()
 			c.WritePacket(keepAliveOut, func(w *protocol.Writer) {
 				packet.WriteKeepAlive(w, ka)
 			})
-		case s.suite.MustID("configuration", "serverbound", "minecraft:client_information"),
-			s.suite.MustID("configuration", "serverbound", "minecraft:custom_payload"),
-			s.suite.MustID("configuration", "serverbound", "minecraft:cookie_response"):
+		case suite.MustID("configuration", "serverbound", "minecraft:client_information"),
+			suite.MustID("configuration", "serverbound", "minecraft:custom_payload"),
+			suite.MustID("configuration", "serverbound", "minecraft:cookie_response"):
 			// 忽略
 		default:
-			_ = registryIDs
 			// 未识别包安全跳过
 		}
 	}
 }
 
 // rejectConf 在配置阶段踢出。
-func (s *Server) rejectConf(c *conn.Conn, reason string) {
-	c.WritePacket(s.suite.MustID("configuration", "clientbound", "minecraft:disconnect"), func(w *protocol.Writer) {
+func (s *Server) rejectConf(c *conn.Conn, suite *version.Suite, reason string) {
+	c.WritePacket(suite.MustID("configuration", "clientbound", "minecraft:disconnect"), func(w *protocol.Writer) {
 		packet.WriteSystemChat(w, reason, false)
 	})
 }
@@ -345,12 +353,6 @@ func awaitPacket(c *conn.Conn, want int32) bool {
 	}
 	return false
 }
-
-// knownPacksBody 返回 select_known_packs 包体（官方录制）。
-func (s *Server) knownPacksBody() []byte { return assets.KnownPacks() }
-
-// gameRegistryBodies 返回注册表包体列表。
-func (s *Server) gameRegistryBodies() [][]byte { return assets.Registries() }
 
 // offlineUUID 按离线模式规则派生 UUID v3("OfflinePlayer:"+name)。
 func offlineUUID(name string) protocol.UUID {

@@ -40,6 +40,21 @@ const (
 	StateGravel     uint32 = 124
 )
 
+// ChunkStyle 描述协议版本间的区块编码差异（均经官方抓包验证）。
+type ChunkStyle struct {
+	HeightmapOrder [3]int32 // 高度图类型顺序；1.21.x: [1,5,4]，26.x: [4,5,1]
+	BiomeID        int32    // 平原生物群系注册表 ID；1.21.x: 40，26.x: 0
+	LegacyEmpty    bool     // true=1.21.x 规范空节(6字节,方块在前)；false=26.x 官方 8 字节模式
+}
+
+// StyleFor 返回协议版本对应的区块编码风格。
+func StyleFor(proto int32) ChunkStyle {
+	if proto <= 774 { // 1.21.11 及更早
+		return ChunkStyle{HeightmapOrder: [3]int32{1, 5, 4}, BiomeID: 40, LegacyEmpty: true}
+	}
+	return ChunkStyle{HeightmapOrder: [3]int32{4, 5, 1}, BiomeID: 0}
+}
+
 // Section 是一个 16×16×16 的方块存储，索引 = y<<8 | z<<4 | x（相对节内坐标）。
 type Section struct {
 	Blocks [SectionVol]uint32
@@ -100,11 +115,11 @@ func isOpaque(s uint32) bool { return s != StateAir && s != StateWater }
 // isSolid 报告方块是否算 motion-blocking 高度（与不透明一致即可）。
 func isSolid(s uint32) bool { return s != StateAir }
 
-// EncodeBody 编码 level_chunk_with_light 包体（不含坐标前缀）。
-func (c *Chunk) EncodeBody() []byte {
+// EncodeBody 以指定协议风格编码 level_chunk_with_light 包体（不含坐标前缀）。
+func (c *Chunk) EncodeBody(style ChunkStyle) []byte {
 	w := protocol.NewWriter()
-	c.writeHeightmaps(w)
-	c.writeSections(w)
+	c.writeHeightmaps(w, style)
+	c.writeSections(w, style)
 	w.VarInt(0) // 方块实体数
 	c.writeLight(w)
 	return w.Bytes()
@@ -121,8 +136,8 @@ func (c *Chunk) heightOf(x, z int32, pred func(uint32) bool) int32 {
 }
 
 // writeHeightmaps 写入 3 张高度图：4=motion_blocking 5=无叶 1=world_surface。
-func (c *Chunk) writeHeightmaps(w *protocol.Writer) {
-	types := []int32{4, 5, 1}
+func (c *Chunk) writeHeightmaps(w *protocol.Writer, style ChunkStyle) {
+	types := style.HeightmapOrder[:]
 	preds := []func(uint32) bool{isOpaque, isOpaque, isSolid}
 	w.VarInt(int32(len(types)))
 	for i, t := range types {
@@ -142,22 +157,38 @@ func (c *Chunk) writeHeightmaps(w *protocol.Writer) {
 }
 
 // writeSections 写入区块数据（先写进中间缓冲再按长度前缀输出）。
-func (c *Chunk) writeSections(w *protocol.Writer) {
+func (c *Chunk) writeSections(w *protocol.Writer, style ChunkStyle) {
 	buf := protocol.NewWriter()
 	for i := int32(0); i < NumSections; i++ {
 		s := c.sections[i]
 		if s == nil {
-			// 官方空节固定 8 字节模式（语义未明，经抓包验证客户端接受）
-			buf.FixedBytes([]byte{0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+			if style.LegacyEmpty {
+				// 1.21.x 规范空节：blockCount 0 + 单值空气 + 单值生物群系（方块在前）
+				buf.Int16(0)
+				writeSingleContainer(buf, 0)
+				writeSingleContainer(buf, style.BiomeID)
+			} else {
+				// 26.x 官方空节固定 8 字节模式（语义未明，经抓包验证客户端接受）
+				buf.FixedBytes([]byte{0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+			}
 			continue
 		}
 		buf.Int16(s.NonAir)
-		writeSingleContainer(buf, c.Biome)
-		writeBlockContainer(buf, &s.Blocks)
+		if style.LegacyEmpty {
+			// 1.21.x：方块容器在前，生物群系在后
+			writeBlockContainer(buf, &s.Blocks)
+			writeSingleContainer(buf, style.BiomeID)
+		} else {
+			// 26.x：生物群系容器在前
+			writeSingleContainer(buf, style.BiomeID)
+			writeBlockContainer(buf, &s.Blocks)
+		}
 	}
 	body := buf.Bytes()
-	// 官方在末尾还有 2 字节（00 28，语义未明）
-	body = append(body, 0x00, 0x28)
+	if !style.LegacyEmpty {
+		// 26.x 官方在末尾还有 2 字节（00 28，语义未明）
+		body = append(body, 0x00, 0x28)
+	}
 	w.VarInt(int32(len(body)))
 	w.RawBytes(body)
 }

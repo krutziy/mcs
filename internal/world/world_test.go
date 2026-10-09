@@ -12,7 +12,7 @@ import (
 func TestFlatChunkMatchesVanillaTemplate(t *testing.T) {
 	ch := NewChunk(0, 0, 0)
 	FlatGenerator{}.Generate(ch)
-	got := ch.EncodeBody()
+	got := ch.EncodeBody(StyleFor(775))
 	want := assets.ChunkTemplate()
 	if !bytes.Equal(got, want) {
 		i := 0
@@ -29,7 +29,7 @@ func TestNoiseChunkStructure(t *testing.T) {
 	g := DefaultNoise(20261010)
 	ch := NewChunk(3, -7, 0)
 	g.Generate(ch)
-	body := ch.EncodeBody()
+	body := ch.EncodeBody(StyleFor(775))
 
 	r := &br{data: body}
 	if n := r.varint(); n != 3 {
@@ -75,8 +75,24 @@ func TestNoiseDeterministic(t *testing.T) {
 	b := NewChunk(1, 2, 0)
 	g.Generate(a)
 	g.Generate(b)
-	if !bytes.Equal(a.EncodeBody(), b.EncodeBody()) {
+	if !bytes.Equal(a.EncodeBody(StyleFor(775)), b.EncodeBody(StyleFor(775))) {
 		t.Error("同种子生成结果不一致")
+	}
+}
+
+// TestFlatChunkMatchesVanilla774 1.21.11 风格的平坦区块与官方 774 抓包逐字节比对。
+func TestFlatChunkMatchesVanilla774(t *testing.T) {
+	ch := NewChunk(0, 0, 0)
+	FlatGenerator{}.Generate(ch)
+	got := ch.EncodeBody(StyleFor(774))
+	want := assets.ChunkTemplate774()
+	if !bytes.Equal(got, want) {
+		i := 0
+		for i < len(got) && i < len(want) && got[i] == want[i] {
+			i++
+		}
+		t.Fatalf("774 平坦区块编码与官方不符：长度 %d vs %d，首差异@%d got…%x want…%x",
+			len(got), len(want), i, got[clamp(i-8, len(got)):clamp(i+16, len(got))], want[clamp(i-8, len(want)):clamp(i+16, len(want))])
 	}
 }
 
