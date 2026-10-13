@@ -16,6 +16,7 @@
 package world
 
 import (
+	"mcserver/internal/assets"
 	"mcserver/internal/protocol"
 )
 
@@ -28,16 +29,17 @@ const (
 	BiomeVol    = 64
 )
 
-// 26.1 方块状态 ID（来自官方 --reports blocks.json，见 README 更新方法）。
+// 方块状态 ID（基准 777 / 26.3 空间，来自官方 --reports blocks.json；
+// 旧版本协议的状态 ID 有偏移，多版本状态翻译是后续工作）。
 const (
 	StateAir        uint32 = 0
 	StateStone      uint32 = 1
-	StateGrassBlock uint32 = 8  // snowy=false
+	StateGrassBlock uint32 = 8  // snowy=true（官方平坦预设同款）
 	StateDirt       uint32 = 10
-	StateBedrock    uint32 = 85
-	StateWater      uint32 = 86 // level=0（静止水源）
-	StateSand       uint32 = 118
-	StateGravel     uint32 = 124
+	StateBedrock    uint32 = 88
+	StateWater      uint32 = 89 // level=0（静止水源）
+	StateSand       uint32 = 121
+	StateGravel     uint32 = 127
 )
 
 // ChunkStyle 描述协议版本间的区块编码差异（均经官方抓包验证）。
@@ -45,14 +47,29 @@ type ChunkStyle struct {
 	HeightmapOrder [3]int32 // 高度图类型顺序；1.21.x: [1,5,4]，26.x: [4,5,1]
 	BiomeID        int32    // 平原生物群系注册表 ID；1.21.x: 40，26.x: 0
 	LegacyEmpty    bool     // true=1.21.x 规范空节(6字节,方块在前)；false=26.x 官方 8 字节模式
+	// StateMap 把世界内部的基准(777)状态 ID 翻译到该协议版本（nil = 777 无需翻译）
+	StateMap map[uint32]uint32
 }
 
 // StyleFor 返回协议版本对应的区块编码风格。
 func StyleFor(proto int32) ChunkStyle {
 	if proto <= 774 { // 1.21.11 及更早
-		return ChunkStyle{HeightmapOrder: [3]int32{1, 5, 4}, BiomeID: 40, LegacyEmpty: true}
+		return ChunkStyle{HeightmapOrder: [3]int32{1, 5, 4}, BiomeID: 40, LegacyEmpty: true,
+			StateMap: assets.StateMap(proto)}
 	}
-	return ChunkStyle{HeightmapOrder: [3]int32{4, 5, 1}, BiomeID: 0}
+	return ChunkStyle{HeightmapOrder: [3]int32{4, 5, 1}, BiomeID: 0,
+		StateMap: assets.StateMap(proto)}
+}
+
+// tr 把基准状态 ID 翻译到目标协议（无映射时原样返回）。
+func (s ChunkStyle) tr(state uint32) uint32 {
+	if s.StateMap == nil {
+		return state
+	}
+	if to, ok := s.StateMap[state]; ok {
+		return to
+	}
+	return state
 }
 
 // Section 是一个 16×16×16 的方块存储，索引 = y<<8 | z<<4 | x（相对节内坐标）。
@@ -176,12 +193,12 @@ func (c *Chunk) writeSections(w *protocol.Writer, style ChunkStyle) {
 		buf.Int16(s.NonAir)
 		if style.LegacyEmpty {
 			// 1.21.x：方块容器在前，生物群系在后
-			writeBlockContainer(buf, &s.Blocks)
+			writeBlockContainer(buf, &s.Blocks, style)
 			writeSingleContainer(buf, style.BiomeID)
 		} else {
 			// 26.x：生物群系容器在前
 			writeSingleContainer(buf, style.BiomeID)
-			writeBlockContainer(buf, &s.Blocks)
+			writeBlockContainer(buf, &s.Blocks, style)
 		}
 	}
 	body := buf.Bytes()
@@ -193,12 +210,12 @@ func (c *Chunk) writeSections(w *protocol.Writer, style ChunkStyle) {
 	w.RawBytes(body)
 }
 
-// writeBlockContainer 编码方块调色板容器（4096 项）。
-func writeBlockContainer(w *protocol.Writer, blocks *[SectionVol]uint32) {
+// writeBlockContainer 编码方块调色板容器（4096 项，状态 ID 经版本翻译）。
+func writeBlockContainer(w *protocol.Writer, blocks *[SectionVol]uint32, style ChunkStyle) {
 	palette, lookup := buildPalette(blocks)
 	switch len(palette) {
 	case 1:
-		writeSingleContainer(w, int32(palette[0]))
+		writeSingleContainer(w, int32(style.tr(palette[0])))
 		return
 	case 0:
 		writeSingleContainer(w, 0)
@@ -208,7 +225,7 @@ func writeBlockContainer(w *protocol.Writer, blocks *[SectionVol]uint32) {
 	w.VarInt(int32(bits))
 	w.VarInt(int32(len(palette)))
 	for _, p := range palette {
-		w.VarInt(int32(p))
+		w.VarInt(int32(style.tr(p)))
 	}
 	indices := make([]uint32, SectionVol)
 	for i, b := range blocks {

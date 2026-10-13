@@ -42,7 +42,8 @@ type PlayerCommand struct {
 }
 
 // BlockDig 玩家对方块的挖掘动作（核心已应用破坏后触发）。
-// Status: 0=开始 1=取消 2=完成；Broke 表示本次是否真的破坏了方块。
+// Status: 0=开始 1=取消 2=完成；Broke 表示本次是否真的破坏了方块；
+// Drops 是本次生成的掉落物（生存模式、通过工具门槛时非空）。
 type BlockDig struct {
 	Player   *entity.Player
 	X, Y, Z  int32
@@ -51,6 +52,7 @@ type BlockDig struct {
 	Sequence int32
 	Broke    bool
 	OldState uint32
+	Drops    []entity.Item
 }
 
 // BlockPlace 玩家放置方块（核心已应用后触发）。State 为放置的方块状态，

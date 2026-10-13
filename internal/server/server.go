@@ -32,20 +32,21 @@ type Config struct {
 
 // WorldConfig 世界配置。
 type WorldConfig struct {
-	Type string `json:"type"` // flat | noise
-	Seed int64  `json:"seed"`
+	Type    string `json:"type"`     // flat | noise
+	Seed    int64  `json:"seed"`
+	SaveDir string `json:"save_dir"` // 存档目录（相对工作目录；空 = 不持久化）
 }
 
 // DefaultConfig 返回默认配置。
 func DefaultConfig() Config {
 	return Config{
 		Port:         25565,
-		MOTD:         "§aGo MC 框架 §7| 小游戏定制服务端",
+		MOTD:         "§aGo MC §7| 类原版生存端 §8(26.3)",
 		MaxPlayers:   20,
-		ViewDistance: 3,
-		Spawn:        [3]float64{8, -60, 8},
-		GameMode:     "creative",
-		World:        WorldConfig{Type: "noise", Seed: 20261010},
+		ViewDistance: 5,
+		Spawn:        [3]float64{8, 0, 8},
+		GameMode:     "survival",
+		World:        WorldConfig{Type: "noise", Seed: 20261010, SaveDir: "world_data"},
 	}
 }
 
@@ -82,12 +83,18 @@ func New(cfg Config) (*Server, error) {
 		MaxPlayers:   cfg.MaxPlayers,
 		WorldType:    cfg.World.Type,
 		WorldSeed:    cfg.World.Seed,
+		SaveDir:      cfg.World.SaveDir,
 	}, suite)
 	return &Server{cfg: cfg, ver: ver, suite: suite, game: g}, nil
 }
 
 // Game 返回游戏实例（供扩展模块注册事件）。
 func (s *Server) Game() *game.Game { return s.game }
+
+// SaveAndStop 保存世界并停止主循环（信号退出用）。
+func (s *Server) SaveAndStop() {
+	s.game.Stop()
+}
 
 // ListenAndServe 开始监听并阻塞接受连接。
 func (s *Server) ListenAndServe() error {

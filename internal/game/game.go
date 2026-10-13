@@ -1,8 +1,11 @@
 package game
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +26,7 @@ type Config struct {
 	MaxPlayers             int32
 	WorldType              string // "flat" | "noise"
 	WorldSeed              int64
+	SaveDir                string // 世界存档目录（空 = 不持久化）
 }
 
 // Game 聚合全部游戏状态，由主循环独占访问。
@@ -31,8 +35,8 @@ type Game struct {
 	Suite *version.Suite
 	Bus   *EventBus
 
-	events  chan Event
-	joinCh  chan *Session
+	events chan Event
+	joinCh chan *Session
 
 	players map[int32]*entity.Player
 	nextEID atomic.Int32
@@ -45,10 +49,15 @@ type Game struct {
 
 	gen   world.Generator
 	world *world.Manager // 服务端权威方块状态（区块缓存）
-	// 物品网络 ID → 方块默认状态 ID（按协议版本；世界统一用 777 状态空间）
-	itemBlocks map[int32]map[int32]uint32
-	// 待广播的方块变更（位置 → 最新状态），flushBlockUpdates 消费
-	pendingBlocks map[[3]int32]uint32
+	// 各版本数据表（物品→方块 / 实体类型 / 掉落 / 工具门槛；世界统一 777 状态空间）
+	itemBlocks    map[int32]map[int32]uint32
+	entityTypes   map[int32]map[string]int32
+	blockDrops    map[int32]map[uint32]int32
+	mineable      map[int32]map[uint32]uint8
+	pickaxes      map[int32]map[int32]uint8
+	itemToCanon   map[int32]map[int32]int32 // 玩家协议物品 ID → 777 基准 ID（反向翻译表）
+	items         map[int32]*itemEntity     // 掉落物实体（item.ID 恒为 777 基准）
+	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
 
 	closed atomic.Bool
 }
@@ -62,17 +71,48 @@ func New(cfg Config, suite *version.Suite) *Game {
 		events:         make(chan Event, 4096),
 		joinCh:         make(chan *Session, 64),
 		players:        map[int32]*entity.Player{},
+		items:          map[int32]*itemEntity{},
 		dayTime:        6000, // 正午
 		clockID:        1,
 		itemBlocks:     map[int32]map[int32]uint32{},
+		entityTypes:    map[int32]map[string]int32{},
+		blockDrops:     map[int32]map[uint32]int32{},
+		mineable:       map[int32]map[uint32]uint8{},
+		pickaxes:       map[int32]map[int32]uint8{},
+		itemToCanon:    map[int32]map[int32]int32{},
 		pendingBlocks:  map[[3]int32]uint32{},
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
 	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
 	g.world = world.NewManager(g.gen)
 	for _, v := range version.All() {
-		if t := assets.ItemBlocks(int32(v.Protocol)); t != nil {
-			g.itemBlocks[int32(v.Protocol)] = t
+		p := int32(v.Protocol)
+		g.itemBlocks[p] = assets.ItemBlocks(p)
+		g.entityTypes[p] = assets.EntityTypes(p)
+		g.blockDrops[p] = assets.BlockDrops(p)
+		g.mineable[p] = assets.MineableMask(p)
+		g.pickaxes[p] = assets.PickaxeBits(p)
+		if im := assets.ItemMap(p); len(im) > 0 {
+			rev := make(map[int32]int32, len(im))
+			for from, to := range im {
+				rev[to] = from
+			}
+			g.itemToCanon[p] = rev
+		}
+	}
+	// 775 无官方报告：借用相邻 776 的表
+	if g.entityTypes[775] == nil {
+		g.entityTypes[775] = g.entityTypes[776]
+	}
+	if g.itemToCanon[775] == nil {
+		g.itemToCanon[775] = g.itemToCanon[776]
+	}
+	// 世界持久化：读档优先于生成器
+	if cfg.SaveDir != "" {
+		if n, err := g.world.Load(cfg.SaveDir); err != nil {
+			log.Printf("[game] 世界读档失败: %v", err)
+		} else if n > 0 {
+			log.Printf("[game] 世界读档 %d 个区块", n)
 		}
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
@@ -111,9 +151,6 @@ func (g *Game) JoinSession(s *Session) {
 // PlayerCount 返回在线人数（供状态查询等外部读取）。
 func (g *Game) PlayerCount() int32 { return g.count.Load() }
 
-// Stop 结束主循环。
-func (g *Game) Stop() { g.closed.Store(true) }
-
 // run 是唯一的游戏主循环 goroutine：20TPS + 事件消费。
 func (g *Game) run() {
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -143,12 +180,36 @@ func (g *Game) tickNow() {
 	g.worldAge++
 	g.dayTime = (g.dayTime + 1) % 24000
 
+	g.tickItems()
+
 	if g.tick%20 == 0 { // 每秒
 		g.broadcastTime()
 		g.checkKeepAlive()
 	}
+	if g.Cfg.SaveDir != "" && g.tick%600 == 0 { // 每 30 秒自动存档
+		g.saveAll()
+	}
 
 	g.Bus.emit(Tick{Count: g.tick})
+}
+
+// saveAll 保存世界脏区块与玩家状态。
+func (g *Game) saveAll() {
+	if n, err := g.world.Save(g.Cfg.SaveDir); err != nil {
+		log.Printf("[game] 世界存档失败: %v", err)
+	} else if n > 0 {
+		log.Printf("[game] 世界存档 %d 个区块", n)
+	}
+	for _, p := range g.players {
+		g.savePlayer(p)
+	}
+}
+
+// Stop 结束主循环（先存档）。
+func (g *Game) Stop() {
+	if g.closed.CompareAndSwap(false, true) {
+		g.saveAll()
+	}
 }
 
 // handleEvent 分发会话事件。
@@ -188,8 +249,53 @@ func (g *Game) handleEvent(e Event) {
 		g.handleHeldSlot(ev)
 	case *playerCreativeSlotEvent:
 		g.handleCreativeSlot(ev)
+	case *playerContainerClickEvent:
+		g.handleContainerClick(ev)
 	}
 	g.flushBlockUpdates()
+}
+
+// playerStateFile 是玩家状态的 JSON 存档（位置 + 物品栏 + 选中槽）。
+type playerStateFile struct {
+	X        float64      `json:"x"`
+	Y        float64      `json:"y"`
+	Z        float64      `json:"z"`
+	Yaw      float32      `json:"yaw"`
+	Pitch    float32      `json:"pitch"`
+	Slots    []entity.Item `json:"slots"`
+	HeldSlot int32        `json:"held"`
+}
+
+// savePlayer 保存玩家状态到存档目录。
+func (g *Game) savePlayer(p *entity.Player) {
+	dir := g.Cfg.SaveDir + "/players"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	st := playerStateFile{X: p.X, Y: p.Y, Z: p.Z, Yaw: p.Yaw, Pitch: p.Pitch, Slots: p.Slots[:], HeldSlot: p.HeldSlot}
+	b, err := json.Marshal(st)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, p.Name+".json"), b, 0o644)
+}
+
+// loadPlayer 恢复玩家状态（无存档时保持出生点/空物品栏）。
+func (g *Game) loadPlayer(p *entity.Player) {
+	b, err := os.ReadFile(filepath.Join(g.Cfg.SaveDir, "players", p.Name+".json"))
+	if err != nil {
+		return
+	}
+	var st playerStateFile
+	if json.Unmarshal(b, &st) != nil {
+		return
+	}
+	if len(st.Slots) == len(p.Slots) {
+		copy(p.Slots[:], st.Slots)
+	}
+	p.HeldSlot = st.HeldSlot
+	p.X, p.Y, p.Z = st.X, st.Y, st.Z
+	p.Yaw, p.Pitch = st.Yaw, st.Pitch
 }
 
 // handleJoin 完成进入世界流程并广播。
@@ -203,6 +309,9 @@ func (g *Game) handleJoin(s *Session) {
 		Y:        g.Cfg.SpawnY,
 		Z:        g.Cfg.SpawnZ,
 		Send:     s,
+	}
+	if g.Cfg.SaveDir != "" {
+		g.loadPlayer(p) // 玩家状态持久化：位置与物品栏
 	}
 	p.BroadcastX, p.BroadcastY, p.BroadcastZ = p.X, p.Y, p.Z
 	p.SentChunks = map[[2]int32]bool{}
@@ -268,8 +377,18 @@ func (g *Game) handleJoin(s *Session) {
 	})
 
 	g.sendChunks(s, p, int32(g.Cfg.SpawnX)>>4, int32(g.Cfg.SpawnZ)>>4)
+	g.syncInventory(p) // 初始物品栏同步
+
+	// 视距内已有的掉落物补给新玩家
+	for _, ie := range g.items {
+		if abs32(int32(ie.x)>>4-int32(p.X)>>4) <= g.Cfg.ViewDistance &&
+			abs32(int32(ie.z)>>4-int32(p.Z)>>4) <= g.Cfg.ViewDistance {
+			g.sendItemSpawn(p, ie)
+		}
+	}
 
 	// 互相可见
+	playerType := func(target *entity.Player) int32 { return g.entityTypeID(target, "player") }
 	for _, other := range g.players {
 		if other.EntityID == eid {
 			continue
@@ -278,14 +397,14 @@ func (g *Game) handleJoin(s *Session) {
 			packet.WritePlayerInfoAdd(w, p.UUID, p.Name, g.Cfg.GameMode)
 		})
 		other.Send.SendPlay("minecraft:add_entity", func(w *protocol.Writer) {
-			packet.SpawnEntity{EntityID: p.EntityID, UUID: p.UUID, Type: EntityTypePlayer,
+			packet.SpawnEntity{EntityID: p.EntityID, UUID: p.UUID, Type: playerType(other),
 				X: p.X, Y: p.Y, Z: p.Z}.Write(w)
 		})
 		s.SendPlay("minecraft:player_info_update", func(w *protocol.Writer) {
 			packet.WritePlayerInfoAdd(w, other.UUID, other.Name, g.Cfg.GameMode)
 		})
 		s.SendPlay("minecraft:add_entity", func(w *protocol.Writer) {
-			packet.SpawnEntity{EntityID: other.EntityID, UUID: other.UUID, Type: EntityTypePlayer,
+			packet.SpawnEntity{EntityID: other.EntityID, UUID: other.UUID, Type: playerType(p),
 				X: other.X, Y: other.Y, Z: other.Z}.Write(w)
 		})
 	}
@@ -328,6 +447,9 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 	}
 	delete(g.players, p.EntityID)
 	g.count.Store(int32(len(g.players)))
+	if g.Cfg.SaveDir != "" {
+		g.savePlayer(p) // 离线即保存玩家状态
+	}
 	for _, other := range g.players {
 		other.Send.SendPlay("minecraft:player_info_remove", func(w *protocol.Writer) {
 			packet.WritePlayerInfoRemove(w, p.UUID)
@@ -451,5 +573,3 @@ func (g *Game) handleCommand(ev *playerCommandEvent) {
 	g.Bus.emit(PlayerCommand{Player: p, Name: ev.Name, Args: ev.Args})
 }
 
-// EntityTypePlayer 是玩家实体在 entity_type 注册表中的 ID（26.1 = 155）。
-const EntityTypePlayer int32 = 155

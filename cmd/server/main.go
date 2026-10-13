@@ -10,6 +10,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"mcserver/internal/server"
 
@@ -38,6 +40,14 @@ func main() {
 		fmt.Println("启动失败:", err)
 		os.Exit(1)
 	}
+	// Ctrl+C / 终止信号：保存世界后退出
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		srv.SaveAndStop()
+		os.Exit(0)
+	}()
 	if err := srv.ListenAndServe(); err != nil {
 		fmt.Println("服务退出:", err)
 		os.Exit(1)

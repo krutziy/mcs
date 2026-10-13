@@ -10,6 +10,9 @@ type Item struct {
 	Count int32
 }
 
+// Held 返回当前手持物品（快捷栏选中槽）。
+func (p *Player) Held() Item { return p.Slots[36+p.HeldSlot] }
+
 // Player 是一个在线玩家的状态。所有字段只在游戏主循环 goroutine 中访问，
 // 会话读 goroutine 通过事件投递修改请求。
 type Player struct {
@@ -23,9 +26,12 @@ type Player struct {
 	Sneaking   bool
 	Sprinting  bool
 
-	// 快捷栏（仅创造模式物品包更新；用于放置时判定手持方块）
-	Hotbar   [9]Item
-	HeldSlot int32
+	// 物品栏（窗口 0 的 46 槽：0-4 合成 5-8 盔甲 9-35 背包 36-44 快捷栏 45 副手；
+	// ID 0 = 空。主循环独占访问）
+	Slots          [46]Item
+	HeldSlot       int32 // 0..8 → Slots[36+HeldSlot]
+	Cursor         Item // 鼠标光标上的物品
+	ContainerState int32 // 容器同步状态号（每次全量同步 +1）
 
 	// 区块视野跟踪（主循环维护：已发送区块集合与当前缓存中心）
 	SentChunks      map[[2]int32]bool

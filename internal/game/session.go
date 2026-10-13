@@ -94,6 +94,11 @@ type playerCreativeSlotEvent struct {
 	cs packet.CreativeSlot
 }
 
+type playerContainerClickEvent struct {
+	p     *entity.Player
+	click packet.ContainerClick
+}
+
 // PlayLoop 阻塞处理 play 状态的入站包，直到连接断开。在独立 goroutine 中运行。
 func (s *Session) PlayLoop() {
 	s.game.JoinSession(s)
@@ -157,6 +162,11 @@ func (s *Session) PlayLoop() {
 			s.game.Submit(&playerHeldSlotEvent{p: p, slot: packet.ReadSetCarriedItem(pr)})
 		case "minecraft:set_creative_mode_slot":
 			s.game.Submit(&playerCreativeSlotEvent{p: p, cs: packet.ReadCreativeSlot(pr)})
+		case "minecraft:container_click":
+			s.game.Submit(&playerContainerClickEvent{p: p, click: packet.ReadContainerClick(pr)})
+		case "minecraft:client_tick_end", "minecraft:player_loaded", "minecraft:punch",
+			"minecraft:move_vehicle", "minecraft:player_input":
+			// 活体心跳/输入流：无需处理
 		default:
 			log.Printf("[session %s] 未处理包 %s (0x%02x, %d字节)", s.name, name, id, len(body))
 		}

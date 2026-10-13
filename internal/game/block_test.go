@@ -65,6 +65,11 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		players:       map[int32]*entity.Player{},
 		world:         world.NewManager(world.VoidGenerator{}),
 		itemBlocks:    map[int32]map[int32]uint32{777: assets.ItemBlocks(777)},
+		entityTypes:   map[int32]map[string]int32{777: assets.EntityTypes(777)},
+		blockDrops:    map[int32]map[uint32]int32{777: assets.BlockDrops(777)},
+		mineable:      map[int32]map[uint32]uint8{777: assets.MineableMask(777)},
+		pickaxes:      map[int32]map[int32]uint8{777: assets.PickaxeBits(777)},
+		items:         map[int32]*itemEntity{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}
 	fs := &fakeSender{}
@@ -146,7 +151,7 @@ func TestDigCancel(t *testing.T) {
 func TestPlaceWithBlockItem(t *testing.T) {
 	g, p, fs := newTestGame(packet.ModeCreative)
 	g.world.SetBlock(8, -61, 8, world.StateStone) // 脚下垫一块石头作点击目标
-	p.Hotbar[0] = entity.Item{ID: 1, Count: 1}    // 物品 1 = 石头（777 表）
+	p.Slots[36] = entity.Item{ID: 1, Count: 1}    // 快捷栏 0 = 物品 1（石头）
 
 	var evs []BlockPlace
 	g.Bus.On(BlockPlace{}, func(e Event) { evs = append(evs, e.(BlockPlace)) })
@@ -192,7 +197,7 @@ func TestPlaceEmptyHand(t *testing.T) {
 	}
 
 	fs.sent = nil
-	p.Hotbar[0] = entity.Item{ID: 1, Count: 1}
+	p.Slots[36] = entity.Item{ID: 1, Count: 1}
 	g.world.SetBlock(8, -60, 8, world.StateDirt) // 目标已被占
 	g.handlePlace(&blockPlaceEvent{p: p, use: packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1, Sequence: 2}})
 	if got := g.world.GetBlock(8, -60, 8); got != world.StateDirt {
@@ -207,7 +212,7 @@ func TestPlaceEmptyHand(t *testing.T) {
 func TestPlaceNonBlockItem(t *testing.T) {
 	g, p, fs := newTestGame(packet.ModeCreative)
 	g.world.SetBlock(8, -61, 8, world.StateStone)
-	p.Hotbar[0] = entity.Item{ID: -1, Count: 1}
+	p.Slots[36] = entity.Item{ID: -1, Count: 1}
 	g.handlePlace(&blockPlaceEvent{p: p, use: packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1, Sequence: 1}})
 	if got := g.world.GetBlock(8, -60, 8); got != world.StateAir {
 		t.Error("非方块物品不应放置")
@@ -217,19 +222,19 @@ func TestPlaceNonBlockItem(t *testing.T) {
 	}
 }
 
-// TestCreativeSlotUpdatesHotbar 创造槽位与手持槽位事件更新快捷栏。
+// TestCreativeSlotUpdatesHotbar 创造槽位与手持槽位事件更新物品栏。
 func TestCreativeSlotUpdatesHotbar(t *testing.T) {
 	g, p, _ := newTestGame(packet.ModeCreative)
 	g.handleCreativeSlot(&playerCreativeSlotEvent{p: p, cs: packet.CreativeSlot{Slot: 37, ItemID: 1, Count: 64, HasItem: true}})
-	if p.Hotbar[1].ID != 1 || p.Hotbar[1].Count != 64 {
-		t.Errorf("槽位 37 应写入快捷栏 1: %+v", p.Hotbar[1])
+	if p.Slots[37].ID != 1 || p.Slots[37].Count != 64 {
+		t.Errorf("槽位 37 应直接写入物品栏: %+v", p.Slots[37])
 	}
 	g.handleHeldSlot(&playerHeldSlotEvent{p: p, slot: 1})
 	if p.HeldSlot != 1 {
 		t.Errorf("HeldSlot = %d, want 1", p.HeldSlot)
 	}
 	g.handleCreativeSlot(&playerCreativeSlotEvent{p: p, cs: packet.CreativeSlot{Slot: 37}})
-	if p.Hotbar[1].ID != 0 {
+	if p.Slots[37].ID != 0 {
 		t.Error("空物品应清空槽位")
 	}
 	g.handleHeldSlot(&playerHeldSlotEvent{p: p, slot: 9}) // 越界忽略
@@ -259,7 +264,8 @@ func TestFlushGroupsSectionUpdates(t *testing.T) {
 	}
 	e1, e2 := r.VarLong(), r.VarLong()
 	// 相对维度底部 y=(-60+64)&15=4：(lx,ly,lz)=(4,4,4) → 4<<8|4<<4|4；(5,4,5) → 5<<8|5<<4|4
-	if e1 != 0x444 || e2 != 0x554 {
+	got := map[int64]bool{e1: true, e2: true}
+	if !got[0x444] || !got[0x554] {
 		t.Errorf("条目编码不符: %x %x", e1, e2)
 	}
 	if r.Err != nil || r.Remaining() != 0 {

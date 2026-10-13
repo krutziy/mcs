@@ -3,4 +3,7 @@
 .gocache/
 *.exe
 server.log
+server_run*.log
 .zcode/
+config.json
+world_data/

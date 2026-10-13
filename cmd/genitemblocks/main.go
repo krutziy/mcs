@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,8 +24,9 @@ import (
 
 type blockEntry struct {
 	States []struct {
-		Default bool `json:"default"`
-		ID      int32 `json:"id"`
+		Default    bool                   `json:"default"`
+		ID         int32                  `json:"id"`
+		Properties map[string]interface{} `json:"properties"`
 	} `json:"states"`
 }
 
@@ -98,4 +100,117 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("%s: %d 项物品→方块映射\n", *out, len(pairs))
+
+	// 顺带输出实体类型表（entitytype_<proto>.txt：名称 → 网络 ID）
+	var entLines []string
+	for name, e := range reg["minecraft:entity_type"].Entries {
+		short := strings.TrimPrefix(name, "minecraft:")
+		entLines = append(entLines, fmt.Sprintf("%s %d", short, e.ProtocolID))
+	}
+	sort.Strings(entLines)
+	entPath := filepath.Join(filepath.Dir(*out), fmt.Sprintf("entitytype_%d.txt", *proto))
+	if err := os.WriteFile(entPath, []byte(strings.Join(entLines, "\n")+"\n"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "写出失败:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s: %d 项实体类型\n", entPath, len(entLines))
+
+	// --- 跨版本 ID 翻译表（当 -reports 是非基准版本时）---
+	if *reports != *canonical {
+		writeTranslateTables(*reports, *canonical, *proto, filepath.Dir(*out))
+	}
+}
+
+// writeTranslateTables 生成 基准(777)→目标版本 的方块状态 ID 与物品 ID 翻译表
+// （statemap_<proto>.txt / itemmap_<proto>.txt，按"同名方块+同属性组合/同名物品"匹配）。
+func writeTranslateTables(reports, canonical string, proto int, outDir string) {
+	cblk := loadBlocks(canonical + "/blocks.json")
+	tblk := loadBlocks(reports + "/blocks.json")
+	var lines []string
+	for name, cb := range cblk {
+		tb, ok := tblk[name]
+		if !ok {
+			continue
+		}
+		for _, cs := range cb.States {
+			for _, ts := range tb.States {
+				if propsEqual(cs.Properties, ts.Properties) {
+					lines = append(lines, fmt.Sprintf("%d %d", cs.ID, ts.ID))
+					break
+				}
+			}
+		}
+	}
+	sort.Strings(lines)
+	path := filepath.Join(outDir, fmt.Sprintf("statemap_%d.txt", proto))
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "写出失败:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s: %d 项状态翻译\n", path, len(lines))
+
+	// 物品 ID 翻译
+	citems := loadItems(canonical + "/registries.json")
+	titems := loadItems(reports + "/registries.json")
+	var ilines []string
+	for name, cid := range citems {
+		if tid, ok := titems[name]; ok {
+			ilines = append(ilines, fmt.Sprintf("%d %d", cid, tid))
+		}
+	}
+	sort.Strings(ilines)
+	ipath := filepath.Join(outDir, fmt.Sprintf("itemmap_%d.txt", proto))
+	if err := os.WriteFile(ipath, []byte(strings.Join(ilines, "\n")+"\n"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "写出失败:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s: %d 项物品翻译\n", ipath, len(ilines))
+}
+
+func loadBlocks(path string) map[string]blockEntry {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "读方块报告失败:", err)
+		os.Exit(1)
+	}
+	blocks := map[string]blockEntry{}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		fmt.Fprintln(os.Stderr, "解析方块报告失败:", err)
+		os.Exit(1)
+	}
+	return blocks
+}
+
+func loadItems(path string) map[string]int32 {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "读注册表失败:", err)
+		os.Exit(1)
+	}
+	var reg map[string]struct {
+		Entries map[string]struct {
+			ProtocolID int32 `json:"protocol_id"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		fmt.Fprintln(os.Stderr, "解析注册表失败:", err)
+		os.Exit(1)
+	}
+	m := map[string]int32{}
+	for name, e := range reg["minecraft:item"].Entries {
+		m[name] = e.ProtocolID
+	}
+	return m
+}
+
+func propsEqual(a, b map[string]interface{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }

@@ -8,6 +8,7 @@ package game
 // 结束本地的"幽灵方块"预测）。
 
 import (
+	"mcserver/internal/assets"
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
@@ -44,14 +45,40 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	if old == world.StateAir {
 		return
 	}
-	// 破坏粒子 + 音效（data = 被破坏方块的 ID），再改世界状态
+	// 破坏粒子 + 音效（data = 被破坏方块的 ID，按观察者协议翻译），再改世界状态
 	for _, v := range g.chunkViewers(a.X>>4, a.Z>>4) {
+		data := g.stateFor(v, old)
 		v.Send.SendPlay("minecraft:level_event", func(w *protocol.Writer) {
-			packet.WriteLevelEvent(w, levelEventBlockBreak, a.X, a.Y, a.Z, int32(old), false)
+			packet.WriteLevelEvent(w, levelEventBlockBreak, a.X, a.Y, a.Z, int32(data), false)
 		})
 	}
 	g.applyBlock(a.X, a.Y, a.Z, world.StateAir, a.Sequence, p)
 	bus.Broke = true
+	// 生存模式：按掉落表生成掉落物（需镐方块还要材质门槛）
+	if g.Cfg.GameMode != packet.ModeCreative {
+		bus.Drops = g.digDrops(p, old)
+		for _, d := range bus.Drops {
+			g.spawnItem(float64(a.X)+0.5, float64(a.Y)+0.5, float64(a.Z)+0.5, d)
+		}
+	}
+}
+
+// digDrops 依据官方 jar 战利品表生成的掉落表计算掉落（数量恒 1 的简化）。
+// 需镐方块（mineable/pickaxe）只有手持足够材质的镐才掉落。
+// 返回的物品 ID 为 777 基准空间。
+func (g *Game) digDrops(p *entity.Player, state uint32) []entity.Item {
+	item, ok := g.blockDrops[777][state]
+	if !ok {
+		return nil
+	}
+	if mask, needsPick := g.mineable[777][state]; needsPick {
+		held := g.canonItem(p, p.Held().ID)
+		bit, isPick := g.pickaxes[777][held]
+		if !isPick || mask&(1<<bit) == 0 {
+			return nil
+		}
+	}
+	return []entity.Item{{ID: item, Count: 1}}
 }
 
 // handlePlace 处理对方块使用物品（放置）：按玩家手持物品查物品→方块表，
@@ -69,15 +96,12 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		Face: u.Face, Sequence: u.Sequence}
 	defer func() { g.Bus.emit(bus) }()
 
-	held := p.Hotbar[p.HeldSlot]
+	held := p.Held()
 	if held.ID == 0 || held.Count <= 0 {
 		g.rejectPlace(p, u, tx, ty, tz) // 空手：回显两处方块状态 + ack（官方行为）
 		return
 	}
-	proto := int32(g.Suite.Version)
-	if sess := g.sessionOf(p); sess != nil {
-		proto = int32(sess.suite.Version)
-	}
+	proto := g.playerProto(p)
 	state, ok := g.itemBlocks[proto][held.ID]
 	if !ok {
 		g.rejectPlace(p, u, tx, ty, tz)
@@ -93,14 +117,23 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	}
 	g.applyBlock(tx, ty, tz, state, u.Sequence, p)
 	bus.State, bus.ItemID = state, held.ID
+	// 生存模式：放置消耗一个手持物品
+	if g.Cfg.GameMode != packet.ModeCreative {
+		s := &p.Slots[36+p.HeldSlot]
+		s.Count--
+		if s.Count <= 0 {
+			*s = entity.Item{}
+		}
+		g.syncInventory(p)
+	}
 }
 
 // rejectPlace 放置被拒（空手/非方块/目标被占）：回显被点击方块与目标位置的
 // 服务端权威状态并 ack 序列号，客户端据此回滚本地预测的"幽灵方块"。
 func (g *Game) rejectPlace(p *entity.Player, u packet.UseItemOn, tx, ty, tz int32) {
-	for _, v := range [][4]int32{{u.X, u.Y, u.Z, 0}, {tx, ty, tz, 0}} {
-		x, y, z := v[0], v[1], v[2]
-		state := g.world.GetBlock(x, y, z)
+	for _, pos := range [][3]int32{{u.X, u.Y, u.Z}, {tx, ty, tz}} {
+		x, y, z := pos[0], pos[1], pos[2]
+		state := g.stateFor(p, g.world.GetBlock(x, y, z))
 		p.Send.SendPlay("minecraft:block_update", func(w *protocol.Writer) {
 			packet.WriteBlockUpdate(w, x, y, z, state)
 		})
@@ -116,18 +149,6 @@ func (g *Game) rejectPlace(p *entity.Player, u packet.UseItemOn, tx, ty, tz int3
 func (g *Game) handleHeldSlot(ev *playerHeldSlotEvent) {
 	if ev.p != nil && ev.slot >= 0 && ev.slot <= 8 {
 		ev.p.HeldSlot = ev.slot
-	}
-}
-
-// handleCreativeSlot 处理创造模式物品栏的槽位更新（快捷栏 36..44）。
-func (g *Game) handleCreativeSlot(ev *playerCreativeSlotEvent) {
-	if ev.p == nil || ev.cs.Slot < 36 || ev.cs.Slot > 44 {
-		return // 其余槽位与 -999 丢弃暂不处理
-	}
-	if ev.cs.HasItem {
-		ev.p.Hotbar[ev.cs.Slot-36] = entity.Item{ID: ev.cs.ItemID, Count: ev.cs.Count}
-	} else {
-		ev.p.Hotbar[ev.cs.Slot-36] = entity.Item{}
 	}
 }
 
@@ -182,7 +203,7 @@ func (g *Game) flushBlockUpdates() {
 		if len(list) == 1 {
 			c := list[0]
 			for _, v := range viewers {
-				x, y, z, s := c.x, c.y, c.z, c.entry.State
+				x, y, z, s := c.x, c.y, c.z, g.stateFor(v, c.entry.State)
 				v.Send.SendPlay("minecraft:block_update", func(w *protocol.Writer) {
 					packet.WriteBlockUpdate(w, x, y, z, s)
 				})
@@ -195,7 +216,11 @@ func (g *Game) flushBlockUpdates() {
 		}
 		for _, v := range viewers {
 			sx, sy, sz := k.cx, k.sy, k.cz
-			es := entries
+			es := make([]packet.SectionEntry, len(entries))
+			for i, e := range entries {
+				es[i] = e
+				es[i].State = g.stateFor(v, e.State)
+			}
 			v.Send.SendPlay("minecraft:section_blocks_update", func(w *protocol.Writer) {
 				packet.WriteSectionBlocksUpdate(w, sx, sy, sz, es)
 			})
@@ -253,6 +278,52 @@ func (g *Game) syncChunks(p *entity.Player) {
 			p.SentChunks[key] = true
 		}
 	}
+}
+
+// playerProto 返回玩家连接的协议版本号。
+func (g *Game) playerProto(p *entity.Player) int32 {
+	if sess := g.sessionOf(p); sess != nil {
+		return int32(sess.suite.Version)
+	}
+	return int32(g.Suite.Version)
+}
+
+// stateFor 把世界的基准(777)方块状态 ID 翻译到玩家协议版本。
+func (g *Game) stateFor(p *entity.Player, state uint32) uint32 {
+	if m := assets.StateMap(g.playerProto(p)); m != nil {
+		if to, ok := m[state]; ok {
+			return to
+		}
+	}
+	return state
+}
+
+// itemFor 把基准(777)物品 ID 翻译到玩家协议版本（用于给玩家发包/入包）。
+func (g *Game) itemFor(p *entity.Player, id int32) int32 {
+	if m := assets.ItemMap(g.playerProto(p)); m != nil {
+		if to, ok := m[id]; ok {
+			return to
+		}
+	}
+	return id
+}
+
+// canonItem 把玩家协议的物品 ID 翻译回 777 基准（工具判定用）。
+func (g *Game) canonItem(p *entity.Player, id int32) int32 {
+	if m := g.itemToCanon[g.playerProto(p)]; m != nil {
+		if to, ok := m[id]; ok {
+			return to
+		}
+	}
+	return id
+}
+
+// entityTypeID 按玩家协议版本查实体类型网络 ID（未登记时 0）。
+func (g *Game) entityTypeID(p *entity.Player, name string) int32 {
+	if m, ok := g.entityTypes[g.playerProto(p)]; ok {
+		return m[name]
+	}
+	return 0
 }
 
 // sessionOf 取玩家背后的会话（非会话发送者时为 nil）。
