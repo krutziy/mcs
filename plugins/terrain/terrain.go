@@ -1,24 +1,31 @@
-package world
+// Package terrain 提供地形生成插件：超平坦与分形噪声起伏地形。
+// 通过 init() 向 world 注册 "flat" / "noise" 两种世界类型。
+// 壳子（cmd/server）通过空白导入装配本插件，删除导入即得到纯空壳。
+package terrain
 
-import "math"
+import (
+	"math"
+
+	"mcserver/internal/world"
+)
 
 // FlatGenerator 生成经典超平坦：基岩 + 泥土×2 + 草方块（表面 y = MinY+4 = -60）。
 type FlatGenerator struct{}
 
 // Generate 填充区块。
-func (FlatGenerator) Generate(ch *Chunk) {
+func (FlatGenerator) Generate(ch *world.Chunk) {
 	for z := int32(0); z < 16; z++ {
 		for x := int32(0); x < 16; x++ {
-			ch.SetBlock(x, 0, z, StateBedrock)
-			ch.SetBlock(x, 1, z, StateDirt)
-			ch.SetBlock(x, 2, z, StateDirt)
+			ch.SetBlock(x, 0, z, world.StateBedrock)
+			ch.SetBlock(x, 1, z, world.StateDirt)
+			ch.SetBlock(x, 2, z, world.StateDirt)
 			ch.SetBlock(x, 3, z, 9) // 官方平坦预设使用 snowy=true 的草方块状态
 		}
 	}
 }
 
 // SurfaceY 返回平坦世界玩家站立 y（绝对坐标）。
-func (FlatGenerator) SurfaceY(_, _ int32) int32 { return MinY + 4 }
+func (FlatGenerator) SurfaceY(_, _ int32) int32 { return world.MinY + 4 }
 
 // NoiseGenerator 用分形值噪声生成起伏地形 + 海平面。
 // 同一 (cx,cz) 永远生成相同结果（确定性）。
@@ -45,13 +52,13 @@ func DefaultNoise(seed int64) *NoiseGenerator {
 func (g *NoiseGenerator) SurfaceY(x, z int32) int32 {
 	h := g.HeightAt(x, z)
 	if h <= g.SeaLevel {
-		return g.SeaLevel + 1 + MinY
+		return g.SeaLevel + 1 + world.MinY
 	}
-	return h + 1 + MinY
+	return h + 1 + world.MinY
 }
 
 // Generate 填充区块。
-func (g *NoiseGenerator) Generate(ch *Chunk) {
+func (g *NoiseGenerator) Generate(ch *world.Chunk) {
 	for z := int32(0); z < 16; z++ {
 		for x := int32(0); x < 16; x++ {
 			wx, wz := ch.CX*16+x, ch.CZ*16+z
@@ -59,21 +66,21 @@ func (g *NoiseGenerator) Generate(ch *Chunk) {
 			for y := int32(0); y <= h; y++ {
 				switch {
 				case y == 0:
-					ch.SetBlock(x, y, z, StateBedrock)
+					ch.SetBlock(x, y, z, world.StateBedrock)
 				case y == h:
 					if h <= g.SeaLevel+1 {
-						ch.SetBlock(x, y, z, StateSand)
+						ch.SetBlock(x, y, z, world.StateSand)
 					} else {
-						ch.SetBlock(x, y, z, StateGrassBlock)
+						ch.SetBlock(x, y, z, world.StateGrassBlock)
 					}
 				case y >= h-3:
-					ch.SetBlock(x, y, z, StateDirt)
+					ch.SetBlock(x, y, z, world.StateDirt)
 				default:
-					ch.SetBlock(x, y, z, StateStone)
+					ch.SetBlock(x, y, z, world.StateStone)
 				}
 			}
 			for y := h + 1; y <= g.SeaLevel; y++ {
-				ch.SetBlock(x, y, z, StateWater)
+				ch.SetBlock(x, y, z, world.StateWater)
 			}
 		}
 	}
@@ -86,8 +93,8 @@ func (g *NoiseGenerator) HeightAt(x, z int32) int32 {
 	if h < 1 {
 		h = 1
 	}
-	if h > WorldHeight-80 {
-		h = WorldHeight - 80
+	if h > world.WorldHeight-80 {
+		h = world.WorldHeight - 80
 	}
 	return h
 }
@@ -128,9 +135,8 @@ func hash2(ix, iy, seed int64) float64 {
 	return float64(h>>11) / float64(1<<53)
 }
 
-// Generator 是世界生成器接口：按需填充区块，输出确定性。
-type Generator interface {
-	Generate(ch *Chunk)
-	// SurfaceY 返回 (x,z) 处玩家可站立的绝对 y 坐标。
-	SurfaceY(x, z int32) int32
+// 向壳子注册本插件提供的世界类型。
+func init() {
+	world.RegisterGenerator("flat", func(seed int64) world.Generator { return FlatGenerator{} })
+	world.RegisterGenerator("noise", func(seed int64) world.Generator { return DefaultNoise(seed) })
 }

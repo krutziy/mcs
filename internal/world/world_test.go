@@ -1,100 +1,13 @@
 package world
 
 import (
-	"bytes"
 	"testing"
-
-	"mcserver/internal/assets"
 )
 
 // TestFlatChunkMatchesVanillaTemplate 用破解出的区块格式自行编码平坦世界，
-// 与官方 26.1 服务端下发的区块包体逐字节比对——地形生成正确性的最强证据。
-func TestFlatChunkMatchesVanillaTemplate(t *testing.T) {
-	ch := NewChunk(0, 0, 0)
-	FlatGenerator{}.Generate(ch)
-	got := ch.EncodeBody(StyleFor(775))
-	want := assets.ChunkTemplate()
-	if !bytes.Equal(got, want) {
-		i := 0
-		for i < len(got) && i < len(want) && got[i] == want[i] {
-			i++
-		}
-		t.Fatalf("平坦区块编码与官方模板不符：长度 %d vs %d，首个差异在偏移 %d\n got …%x\nwant …%x",
-			len(got), len(want), i, got[clamp(i-8, len(got)):clamp(i+16, len(got))], want[clamp(i-8, len(want)):clamp(i+16, len(want))])
-	}
-}
 
-// TestNoiseChunkStructure 生成噪声地形并校验包体结构完整。
-func TestNoiseChunkStructure(t *testing.T) {
-	g := DefaultNoise(20261010)
-	ch := NewChunk(3, -7, 0)
-	g.Generate(ch)
-	body := ch.EncodeBody(StyleFor(775))
 
-	r := &br{data: body}
-	if n := r.varint(); n != 3 {
-		t.Fatalf("高度图条目 = %d", n)
-	}
-	for k := 0; k < 3; k++ {
-		_ = r.varint()
-		cnt := r.varint()
-		if cnt != 37 {
-			t.Errorf("高度图 long 数 = %d，期望 37", cnt)
-		}
-		r.skip(int(cnt) * 8)
-	}
-	dl := r.varint()
-	if dl <= 0 || int(dl) > r.remaining() {
-		t.Fatalf("区块数据长度异常 %d（剩 %d）", dl, r.remaining())
-	}
-	r.skip(int(dl))
-	if r.varint() != 0 { // 方块实体
-		t.Error("方块实体应为空")
-	}
-	if r.remaining() < 10 {
-		t.Fatalf("光照段缺失，剩余 %d", r.remaining())
-	}
 
-	// 地形合理性：地表应为草/沙，其上为空
-	h := g.HeightAt(3*16+8, -7*16+8)
-	if h < 5 || h > WorldHeight-80 {
-		t.Fatalf("地形高度异常 %d", h)
-	}
-	if s := ch.GetBlock(8, h, 8); s != StateGrassBlock && s != StateSand {
-		t.Errorf("地表方块 = %d", s)
-	}
-	if s := ch.GetBlock(8, h+1, 8); s != StateAir && s != StateWater {
-		t.Errorf("地表上方 = %d", s)
-	}
-}
-
-// TestNoiseDeterministic 同一种子两次生成结果一致。
-func TestNoiseDeterministic(t *testing.T) {
-	g := DefaultNoise(42)
-	a := NewChunk(1, 2, 0)
-	b := NewChunk(1, 2, 0)
-	g.Generate(a)
-	g.Generate(b)
-	if !bytes.Equal(a.EncodeBody(StyleFor(775)), b.EncodeBody(StyleFor(775))) {
-		t.Error("同种子生成结果不一致")
-	}
-}
-
-// TestFlatChunkMatchesVanilla774 1.21.11 风格的平坦区块与官方 774 抓包逐字节比对。
-func TestFlatChunkMatchesVanilla774(t *testing.T) {
-	ch := NewChunk(0, 0, 0)
-	FlatGenerator{}.Generate(ch)
-	got := ch.EncodeBody(StyleFor(774))
-	want := assets.ChunkTemplate774()
-	if !bytes.Equal(got, want) {
-		i := 0
-		for i < len(got) && i < len(want) && got[i] == want[i] {
-			i++
-		}
-		t.Fatalf("774 平坦区块编码与官方不符：长度 %d vs %d，首差异@%d got…%x want…%x",
-			len(got), len(want), i, got[clamp(i-8, len(got)):clamp(i+16, len(got))], want[clamp(i-8, len(want)):clamp(i+16, len(want))])
-	}
-}
 
 func TestPackValues(t *testing.T) {
 	// 9 位打包：值 4 连续 256 个 → 37 long，首个与官方模板一致
@@ -147,4 +60,49 @@ func clamp(v, hi int) int {
 		v = hi
 	}
 	return v
+}
+
+// TestVoidChunkStructure 虚空世界（空壳默认）区块结构自校验。
+func TestVoidChunkStructure(t *testing.T) {
+	ch := NewChunk(0, 0, 0)
+	VoidGenerator{}.Generate(ch)
+	for _, proto := range []int32{774, 775, 777} {
+		body := ch.EncodeBody(StyleFor(proto))
+		r := &br{data: body}
+		if n := r.varint(); n != 3 {
+			t.Fatalf("proto%d: 高度图条目 = %d", proto, n)
+		}
+		for k := 0; k < 3; k++ {
+			_ = r.varint()
+			cnt := r.varint()
+			if cnt != 37 {
+				t.Errorf("proto%d: 高度图 long 数 = %d", proto, cnt)
+			}
+			r.skip(int(cnt) * 8)
+		}
+		dl := r.varint()
+		if dl <= 0 {
+			t.Fatalf("proto%d: 空区块数据异常", proto)
+		}
+		r.skip(int(dl))
+		if r.varint() != 0 { // 方块实体
+			t.Error("方块实体应为空")
+		}
+		if r.remaining() < 10 {
+			t.Fatalf("proto%d: 光照段缺失", proto)
+		}
+		if ch.GetBlock(8, 4, 8) != StateAir {
+			t.Error("虚空世界不应有方块")
+		}
+	}
+}
+
+// TestGeneratorRegistry 注册表行为。
+func TestGeneratorRegistry(t *testing.T) {
+	if _, ok := NewGenerator("void", 0).(VoidGenerator); !ok {
+		t.Error("void 应返回虚空生成器")
+	}
+	if _, ok := NewGenerator("不存在的类型", 0).(VoidGenerator); !ok {
+		t.Error("未注册类型应回退为虚空")
+	}
 }

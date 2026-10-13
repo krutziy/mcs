@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"mcserver/internal/assets"
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
@@ -43,8 +42,7 @@ type Game struct {
 	dayTime  int64
 	clockID  int32 // 白天时钟 ID（官方录制为 1）
 
-	registryBodies [][]byte
-	gen            world.Generator
+	gen world.Generator
 
 	closed atomic.Bool
 }
@@ -58,19 +56,11 @@ func New(cfg Config, suite *version.Suite) *Game {
 		events:         make(chan Event, 4096),
 		joinCh:         make(chan *Session, 64),
 		players:        map[int32]*entity.Player{},
-		registryBodies: assets.Registries(775), // 兜底；实际按连接版本在 server 层下发
-		dayTime:        6000, // 正午
-		clockID:        1,
+		dayTime: 6000, // 正午
+		clockID: 1,
 	}
-	switch cfg.WorldType {
-	case "noise":
-		g.gen = world.DefaultNoise(cfg.WorldSeed)
-	default:
-		g.gen = world.FlatGenerator{}
-		if cfg.SpawnY == 0 {
-			g.Cfg.SpawnY = float64(world.MinY + 4)
-		}
-	}
+	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
+	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
 	g.nextEID.Store(100)
 	go g.run()
 	return g

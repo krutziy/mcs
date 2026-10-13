@@ -1,5 +1,8 @@
-// mcserver 是一个面向小游戏定制的 Minecraft Java 版服务端框架。
-// 当前支持 26.1（协议 775），离线登录，多玩家可见、聊天、事件总线。
+// mcserver 是 Minecraft Java 版服务端【空壳】：
+// 只包含协议/登录/多人并发/事件总线/空世界等服务器必备核心。
+//
+// 附加能力（地形生成等）以插件形式装配在下方导入区——
+// 删除对应导入行即得到不含该功能的纯壳。
 package main
 
 import (
@@ -7,9 +10,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 
 	"mcserver/internal/server"
+
+	// ---- 附加功能装配区（插件在此注册，删除行即移除功能） ----
+	_ "mcserver/plugins/terrain" // 地形生成：flat / noise 世界类型
 )
 
 func main() {
@@ -37,5 +42,4 @@ func main() {
 		fmt.Println("服务退出:", err)
 		os.Exit(1)
 	}
-	_ = time.Now()
 }

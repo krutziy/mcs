@@ -1,12 +1,12 @@
 {
   "port": 25565,
-  "motd": "§aGo MC 框架 §7| 通用服务端底座",
+  "motd": "§7Go MC 空壳 §8| void",
   "max_players": 20,
   "view_distance": 3,
-  "spawn": [8, -60, 8],
+  "spawn": [8, -16, 8],
   "gamemode": "creative",
   "world": {
-    "type": "flat",
+    "type": "void",
     "seed": 20261010
   }
 }
