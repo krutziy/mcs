@@ -45,7 +45,7 @@ func DefaultConfig() Config {
 		ViewDistance: 3,
 		Spawn:        [3]float64{8, -60, 8},
 		GameMode:     "creative",
-		World:        WorldConfig{Type: "void", Seed: 20261010},
+		World:        WorldConfig{Type: "noise", Seed: 20261010},
 	}
 }
 

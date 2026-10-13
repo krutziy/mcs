@@ -1,12 +1,12 @@
 {
   "port": 25565,
-  "motd": "§7Go MC 空壳 §8| void",
+  "motd": "§aGo MC §7| 类原版生存端 §8(26.3)",
   "max_players": 20,
-  "view_distance": 3,
-  "spawn": [8, -16, 8],
-  "gamemode": "creative",
+  "view_distance": 5,
+  "spawn": [8, 0, 8],
+  "gamemode": "survival",
   "world": {
-    "type": "void",
+    "type": "noise",
     "seed": 20261010
   }
 }

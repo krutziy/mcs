@@ -1,135 +1,63 @@
-# mcserver —— Minecraft Java 版服务端空壳（main 分支）
+# mcserver-26.3 —— 类原版生存端（26.3 分支）
 
-用 Go 从零实现的多版本 Minecraft 服务端框架。**main 分支定位是"全空的世界壳子"**：
-只包含搭建服务器必备的核心——协议编解码、离线登录、多人并发、事件总线、空世界（虚空）。
+从 `main`（空壳）分叉出的**类原版生存服务端**：目标是用 Go 提供与官方 Java 服务端
+行为等价的原版生存体验，主线跟随最新版本 **26.3（协议 777）**，同时天然继承空壳的
+多版本同服能力（1.21.11 / 26.1 / 26.2 / 26.3 可同时在线）。
 
-地形生成等一切附加能力都是**插件**（`plugins/` 目录），按需装配、删行即卸。
+> 本分支默认世界为噪声地形（`world.type: noise`）、生存模式、按地形自动选取出生点。
+> 空壳的核心与插件机制说明见 `main` 分支 README。
 
-## 分支结构
+## 当前状态
 
-| 分支 | 定位 |
-|---|---|
-| `main` | 空壳：协议/登录/并发/事件总线/虚空世界 + 插件机制 |
-| `26.3` | 类原版生存端（以行为等价方式用 Go 重写，主线跟随最新 26.3） |
-| 未来 | 起床战争、逃杀等玩法分支，均从 main 叉出 |
+- [x] 继承空壳全部能力（多版本、离线登录、多人互见、聊天、事件总线）
+- [x] 地形生成（噪声起伏 + 海平面 + 沙滩，区块编码与官方逐字节一致）
+- [x] 按地形自动出生点（config `spawn` y 设为 0）
+- [ ] **生存要素路线图**（自上而下逐步实现）：
+  - [ ] 方块交互：破坏/放置 + 服务端权威方块存储 + 区块增量更新
+  - [ ] 世界持久化：区块存盘/读盘（退出重进世界不变）
+  - [ ] 物品栏与物品：快捷栏/背包、挖掘掉落、拾取
+  - [ ] 生命值/饥饿/伤害/死亡重生
+  - [ ] 昼夜循环与世界时间持久化
+  - [ ] 生物生成与 AI（先被动后敌对）
+  - [ ] 合成/熔炉等原版机制
+  - [ ] 正版验证（Mojang session server）与 AES-CFB8 加密
 
-## 核心能力（空壳自带）
+## 关于"Java 转 Go"的实现方式（重要）
 
-- **多版本同服**：1.21.11 / 26.1 / 26.2 / 26.3（协议 774-777），不同版本客户端同时在线互见
-- 离线登录（任意用户名）、服务器列表 ping、20TPS 主循环、KeepAlive
-- 事件总线（玩法扩展点）：`PlayerJoin / PlayerQuit / PlayerMoved / PlayerChatted / PlayerCommand / Tick`
-- 空世界（void）：客户端可进可动，世界为纯虚空——一切内容由插件注入
-- 内置命令：`/list` `/spawn` `/help`
+本分支**不是**对官方 Java 服务端的代码移植，而是**行为等价重写**（clean-room
+reimplementation）：所有协议格式与游戏行为通过抓包观察、官方数据报告和黑盒实验
+推导，Go 代码全部原创。这与 Glowstone（Java）、Cuberite（C++）、Minestom 等
+长期公开存在的第三方服务端性质相同。
 
-## 插件机制
+### 合规边界（EULA / 版权）
 
-插件 = 一个在 `init()` 中向核心注册能力的 Go 包，装配在 `cmd/server/main.go` 的导入区：
+Minecraft EULA 约束的是 Mojang 软件本身的使用。本项目：
 
-```go
-// ---- 附加功能装配区（插件在此注册，删除行即移除功能） ----
-_ "mcserver/plugins/terrain" // 地形生成：flat / noise 世界类型
-```
+✅ **安全区**（本项目所做）
+- 依据公开协议文档、网络抓包、官方 `--reports` 数据生成输出做协议实现
+- 原创实现游戏机制（自己的方块物理、物品、AI 代码）
+- 长期先例：Glowstone / Cuberite / Minestom / Prismarine 等开源服务端存在十余年，
+  Mojang/Microsoft 从未针对清洁室服务端采取行动，且官方生态明确容纳第三方服务端
 
-现有插件：
+⚠️ **不要做**
+- 不要把反编译出的 Mojang Java 源码逐行翻译成 Go（衍生作品，侵犯版权且违反 EULA）
+- 不要再分发官方 jar、材质、音效等受版权保护的资源
+- 不要在命名/宣传上暗示官方出品（避免 "Minecraft 官方" 类表述）
 
-| 插件 | 注册内容 | 说明 |
-|---|---|---|
-| `plugins/terrain` | 世界类型 `flat` / `noise` | 超平坦、分形噪声起伏地形+海平面；区块编码与官方逐字节一致 |
+📋 **运营注意**
+- 公开运营服务器需遵守 [Minecraft Usage Guidelines](https://www.minecraft.net/en-us/usage-guidelines)
+  （品牌使用、商业化限制等），这与任何第三方服务端一致
 
-写一个新世界插件只需要：
-
-```go
-package myworld
-
-func init() {
-    world.RegisterGenerator("myworld", func(seed int64) world.Generator {
-        return MyGenerator{seed}
-    })
-}
-```
-
-## 快速开始
+## 开发
 
 ```bash
-. .tools/env.sh          # 项目内便携版 Go（不污染系统）
+. .tools/env.sh
 "$GO" build -o server.exe ./cmd/server/
-./server.exe             # 读取 config.json（首次自动生成）
+./server.exe     # 噪声地形 + 生存模式，26.3 客户端直连 127.0.0.1:25565
 ```
 
-config.json 的 `world.type`：`void`（空壳默认）/ `flat` / `noise`（需装配 terrain 插件）。
-
-## 架构
-
-```
-cmd/server        壳子入口（插件装配区）
-cmd/recorder      协议录制客户端（开发工具）
-plugins/          ★附加功能（地形生成等，main 不主动依赖）
-internal/
-├── protocol/     线格式：VarInt、String、Position、UUID、NBT
-├── conn/         连接层：分帧、zlib 压缩、包读写
-├── version/      多版本抽象：Suite 包ID表 + 差异标志
-├── packet/       各状态包编解码（官方字节级回归测试）
-├── assets/       按版本录制的注册表/known packs 资产
-├── entity/       玩家状态
-├── game/         事件总线、会话、20TPS 主循环
-├── server/       TCP 监听、状态机、config.json
-└── world/        区块数据结构与编码 + 生成器注册表（默认虚空）
-```
-
-### 并发模型（写玩法不需要锁）
-
-```
-连接读goroutine ×N ──→ events channel ──→ 单个游戏主循环(20TPS)
-                                            │ 事件总线分发（玩法回调）
-                             各会话写（conn 内部带锁）←┘
-```
-
-## 多版本兼容原理
-
-| 差异点 | 处理方式 |
-|---|---|
-| 包 ID（每版不同） | 每版本一张 Suite 表，由官方 `--reports` 的 packets.json 生成 |
-| 注册表/known packs | 按版本录制官方 registry_data 包体原样回放（internal/assets/data/<协议号>/） |
-| 区块编码 | `world.ChunkStyle`：1.21.x 节内**方块在前/平原群系40/高度图序[1,5,4]**；26.x **群系在前/群系0/高度图序[4,5,1]/特殊8字节空节** |
-| set_time | 1.21.x 经典三字段；26.x 时钟列表（`version.Version.ClassicTime`） |
-| accept_teleportation | 26.3 起回显位置朝向（`ConfirmEchoesPos`） |
-| 其他包 | 四版本逐字节比对确认同构，直接共用编解码 |
-
-新增版本三步：官方 jar `--reports` → 生成 `packets_NNN.go` → 录制资产 + 登记差异标志。
-
-## 合规说明
-
-本项目是**协议层的清洁室重实现**（clean-room）：不含任何 Mojang 代码或资源文件，
-格式知识来自对官方服务端的网络抓包与官方公开的数据生成报告，这与 Glowstone、
-Cuberite、Minestom 等长期公开存在的第三方服务端同一性质。注意：
-不要直接翻译/复制 Mojang 反编译源码（那是衍生作品）；不要再分发官方 jar、
-材质、音效等资源；公开运营需遵守 Mojang 的商业使用准则。详见仓库 `26.3` 分支
-README 的完整讨论。
-
-## 开发工具链（.tools/，已 gitignore）
-
-| 工具 | 用途 |
-|---|---|
-| `.tools/go` | 便携版 Go（`. .tools/env.sh` 后用 `$GO`） |
-| `cmd/recorder` | 协议录制客户端：连任意服务端按官方包名存包 |
-| `.tools/v263` 等 | 各版本官方参考服 + `--reports` 数据 |
-
-**更新嵌入资产**（升级版本时）：
-
-```bash
-cd .tools/vXXX/server && java -jar server.jar nogui   # 官方参考服
-./recorder.exe -addr 127.0.0.1:25566 -out .tools/capX -t 6s -version XXX
-# 把抓到的 registry_*/known_packs .bin 拷入 internal/assets/data/<协议号>/
-```
-
-## 测试
-
-```bash
-. .tools/env.sh && "$GO" test ./...
-```
-
-- `protocol`：VarInt/NBT/Position 往返与官方样例字节
-- `conn`：分帧/压缩往返（含"低于阈值包带 0x00 标记"的字节级断言）
-- `packet`：黄金字节测试——与官方抓包逐字节比对（player_position、entity_position_sync）
-- `world`：虚空区块结构 ×4 版本、生成器注册表行为
-- `plugins/terrain`：区块黄金测试 ×2（775/774 生成输出与官方逐字节一致）、噪声结构/确定性
+生存要素的实现入口：
+- 方块交互 → `internal/game/session.go`（block_dig/block_place 入站包）+ `internal/world`（方块存储）
+- 持久化 → `internal/world`（Chunk 存取盘）
+- 生命值等状态 → `internal/entity` + 新增 play 状态包编解码（`internal/packet`）
+- 每加一个包先看官方表：`.tools/v263/generated/reports/packet_table.txt`

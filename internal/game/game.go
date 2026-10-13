@@ -61,6 +61,14 @@ func New(cfg Config, suite *version.Suite) *Game {
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
 	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
+	// 生存端：配置 spawn y=0 时按地形自动取站立表面
+	if cfg.SpawnY == 0 {
+		if sp, ok := g.gen.(interface{ SurfaceY(x, z int32) int32 }); ok {
+			g.Cfg.SpawnY = float64(sp.SurfaceY(int32(cfg.SpawnX), int32(cfg.SpawnZ)))
+		} else {
+			g.Cfg.SpawnY = 0
+		}
+	}
 	g.nextEID.Store(100)
 	go g.run()
 	return g
