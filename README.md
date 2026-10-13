@@ -4,8 +4,9 @@
 行为等价的原版生存体验，主线跟随最新版本 **26.3（协议 777）**，同时天然继承空壳的
 多版本同服能力（1.21.11 / 26.1 / 26.2 / 26.3 可同时在线）。
 
-> 本分支默认世界为噪声地形（`world.type: noise`）、生存模式、按地形自动选取出生点。
-> 空壳的核心与插件机制说明见 `main` 分支 README。
+> 本分支默认世界为噪声地形（`world.type: noise`）、按地形自动选取出生点。
+> 默认游戏模式暂为 **creative**（方块放置依赖手持物品，物品栏在后续里程碑，
+> 落地后切回 survival）。空壳的核心与插件机制说明见 `main` 分支 README。
 
 ## 当前状态
 
@@ -13,7 +14,9 @@
 - [x] 地形生成（噪声起伏 + 海平面 + 沙滩，区块编码与官方逐字节一致）
 - [x] 按地形自动出生点（config `spawn` y 设为 0）
 - [ ] **生存要素路线图**（自上而下逐步实现）：
-  - [ ] 方块交互：破坏/放置 + 服务端权威方块存储 + 区块增量更新
+  - [x] 方块交互：破坏/放置 + 服务端权威方块存储 + 区块增量更新
+    （26.3/1.21.11/26.2 可放；26.1 暂无物品映射表只可挖。生存模式挖掘
+    时长校验未做，finish 即破坏；创造 start 即时破坏）
   - [ ] 世界持久化：区块存盘/读盘（退出重进世界不变）
   - [ ] 物品栏与物品：快捷栏/背包、挖掘掉落、拾取
   - [ ] 生命值/饥饿/伤害/死亡重生
@@ -57,7 +60,31 @@ Minecraft EULA 约束的是 Mojang 软件本身的使用。本项目：
 ```
 
 生存要素的实现入口：
-- 方块交互 → `internal/game/session.go`（block_dig/block_place 入站包）+ `internal/world`（方块存储）
+- 方块交互 → `internal/game/block.go`（挖掘/放置/广播/ack）+ `internal/game/session.go`（block_dig/block_place 入站包）+ `internal/world/manager.go`（服务端权威方块存储）
 - 持久化 → `internal/world`（Chunk 存取盘）
 - 生命值等状态 → `internal/entity` + 新增 play 状态包编解码（`internal/packet`）
-- 每加一个包先看官方表：`.tools/v263/generated/reports/packet_table.txt`
+- 每加一个包先看官方表：`.tools/v263/generated/reports/packets.json`
+
+### 方块交互的抓包验证（26.3）
+
+相关包格式均经官方参考服黑盒对拍（录制资产 `.tools/capBlock263*`，方法：
+`DIG=1 SURVIVAL_WAIT=1 PLACE=1 ./recorder.exe -addr 127.0.0.1:25566 ...`）：
+
+| 包 | 方向 | 格式要点 |
+|---|---|---|
+| `block_update` | 下行 | 位置 long（x26/z26/y12）+ VarInt 状态 |
+| `section_blocks_update` | 下行 | 节坐标 long（x22/z22/y20）+ VarInt 数 + VarLong（状态<<12 \| lx<<8\|lz<<4\|ly）|
+| `block_changed_ack` | 下行 | VarInt 序列号 |
+| `player_action` | 上行 | VarInt 状态 + 位置 + **字节**面 + VarInt 序列 |
+| `use_item_on` | 上行 | VarInt 手 + 位置 + **VarInt** 面 + 3×光标 + 2×布尔 + VarInt 序列 |
+| `set_creative_mode_slot` | 上行 | Short 槽位 + Slot 物品（无组件时 present+ID+数量+0+0）|
+| `set_carried_item` | 上行 | Short 槽位 |
+| `level_event` | 下行 | Int 事件 + 位置 + Int 数据 + 布尔（破坏=2001，数据=方块状态）|
+
+经验证的原版行为（我们的实现已对齐）：
+- 放置被拒（空手/目标被占）回「点击位+目标位」两个 block_update + ack（幽灵方块回滚）
+- 机器人必须发 `player_loaded` 并持续 `client_tick_end`，否则官方服丢弃挖掘 start
+- 26.3 的 `punch`（挥手）是空载荷
+
+物品→方块映射表由 `cmd/genitemblocks` 从官方 reports 生成
+（`internal/assets/data/itemblocks_<proto>.txt`，世界统一用 777 状态空间）。

@@ -16,6 +16,7 @@ import (
 	"crypto/md5"
 
 	"mcserver/internal/conn"
+	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
 	"mcserver/internal/version"
 )
@@ -139,11 +140,67 @@ func main() {
 }
 
 // recordPlay 录制游戏阶段的包，并应答 keepalive/ping/传送确认。
+// 环境变量脚本动作（进入游戏 2 秒后执行，用于方块交互抓包）：
+//
+//	DIG=1        挖脚下方块：发 player_action(start)；SURVIVAL_WAIT=1 时
+//	             再等 1.5 秒发 finish（对官方生存服）
+//	PLACE=1      放置：先发 set_creative_mode_slot(快捷栏0, PLACE_ITEM_ID)
+//	             与 set_carried_item(0)，再对挖掉的洞底发 use_item_on
+//	PLACE_ITEM_ID=1  放置用的物品网络 ID（默认 1 = 石头，777 空间）
 func recordPlay(c *conn.Conn, suite *version.Suite, proto version.Protocol, seq *int) {
 	deadline := time.Now().Add(*duration)
 	var pendingTeleport int32 = -1
 	walk := os.Getenv("WALK") == "1"
+	dig := os.Getenv("DIG") == "1"
+	place := os.Getenv("PLACE") == "1"
+	survivalWait := os.Getenv("SURVIVAL_WAIT") == "1"
+	placeItem := int32(1)
+	if v := os.Getenv("PLACE_ITEM_ID"); v != "" {
+		n := 0
+		fmt.Sscanf(v, "%d", &n)
+		if n > 0 {
+			placeItem = int32(n)
+		}
+	}
 	var x, y, z = 8.0, -60.0, 8.0
+	var acted bool
+	nextSeq := int32(0)
+	// 26.x 真实客户端进入游戏即声明 player_loaded，并每刻发 client_tick_end；
+	// 官方服缺了它们会丢弃部分输入（挖掘 start 被无视 → finish 时 mismatch）
+	if id, ok := suite.ID("play", "serverbound", "minecraft:player_loaded"); ok {
+		c.WritePacket(id, func(w *protocol.Writer) {})
+	}
+	tickEndID, tickEndOK := suite.ID("play", "serverbound", "minecraft:client_tick_end")
+	stopTicks := make(chan struct{})
+	go func() {
+		if !tickEndOK {
+			return
+		}
+		t := time.NewTicker(50 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopTicks:
+				return
+			case <-t.C:
+				c.WritePacket(tickEndID, func(w *protocol.Writer) {})
+			}
+		}
+	}()
+	defer close(stopTicks)
+	// DIG_OFF=x,z：挖掘目标相对出生点的格子偏移（对照实验用）
+	offX, offZ := int32(0), int32(0)
+	if v := os.Getenv("DIG_OFF"); v != "" {
+		fmt.Sscanf(v, "%d,%d", &offX, &offZ)
+	}
+	// DIG_ABS=x,y,z：直接指定挖掘目标（绝对坐标，覆盖偏移）
+	var digAbs [3]int32
+	haveAbs := false
+	if v := os.Getenv("DIG_ABS"); v != "" {
+		if n, _ := fmt.Sscanf(v, "%d,%d,%d", &digAbs[0], &digAbs[1], &digAbs[2]); n == 3 {
+			haveAbs = true
+		}
+	}
 	for time.Now().Before(deadline) {
 		if walk {
 			x += 0.35
@@ -154,6 +211,68 @@ func recordPlay(c *conn.Conn, suite *version.Suite, proto version.Protocol, seq 
 				w.Uint8(1) // onGround
 			})
 			time.Sleep(100 * time.Millisecond)
+		}
+		// 方块交互脚本：位置由 player_position 更新，等 2 秒让区块加载完成
+		if (dig || place) && !acted && time.Until(deadline) < *duration-2*time.Second {
+			acted = true
+			bx, by, bz := int32(x)+offX, int32(y)-1, int32(z)+offZ
+			if haveAbs {
+				bx, by, bz = digAbs[0], digAbs[1], digAbs[2]
+			}
+			nextSeq++
+			seqID := nextSeq
+			if swingID, ok := suite.ID("play", "serverbound", "minecraft:punch"); ok {
+				c.WritePacket(swingID, func(w *protocol.Writer) {}) // 26.3: 空载荷
+			}
+			c.WritePacket(suite.MustID("play", "serverbound", "minecraft:player_action"), func(w *protocol.Writer) {
+				w.VarInt(0) // start digging
+				w.Position(protocol.Position{X: bx, Y: by, Z: bz})
+				w.Int8(1)   // face: top
+				w.VarInt(seqID)
+			})
+			log.Printf("已发送挖掘 start seq=%d pos=(%d,%d,%d)", seqID, bx, by, bz)
+			if survivalWait {
+				waitMs := 3000
+				if v := os.Getenv("DIG_WAIT_MS"); v != "" {
+					fmt.Sscanf(v, "%d", &waitMs)
+				}
+				time.Sleep(time.Duration(waitMs) * time.Millisecond)
+				nextSeq++
+				seqID = nextSeq
+				c.WritePacket(suite.MustID("play", "serverbound", "minecraft:player_action"), func(w *protocol.Writer) {
+					w.VarInt(2) // finish digging
+					w.Position(protocol.Position{X: bx, Y: by, Z: bz})
+					w.Int8(1)
+					w.VarInt(seqID)
+				})
+				log.Printf("已发送挖掘 finish seq=%d pos=(%d,%d,%d)", seqID, bx, by, bz)
+			}
+			if place {
+				time.Sleep(500 * time.Millisecond)
+				// 石头放进快捷栏第 0 格并选中
+				c.WritePacket(suite.MustID("play", "serverbound", "minecraft:set_creative_mode_slot"), func(w *protocol.Writer) {
+					w.Int16(36) // 快捷栏槽 0
+					packet.WriteCreativeSlotItem(w, placeItem, 1)
+				})
+				c.WritePacket(suite.MustID("play", "serverbound", "minecraft:set_carried_item"), func(w *protocol.Writer) {
+					w.Int16(0)
+				})
+				nextSeq++
+				seqID = nextSeq
+				px, py, pz := bx, by-1, bz // 点击洞底的顶面 → 放回挖掉的位置
+				c.WritePacket(suite.MustID("play", "serverbound", "minecraft:use_item_on"), func(w *protocol.Writer) {
+					w.VarInt(0) // main hand
+					w.Position(protocol.Position{X: px, Y: py, Z: pz})
+					w.VarInt(1) // face: top
+					w.Float(0.5)
+					w.Float(1.0)
+					w.Float(0.5)
+					w.Bool(false) // insideBlock
+					w.Bool(false) // worldBorderHit
+					w.VarInt(seqID)
+				})
+				log.Printf("已发送放置 seq=%d 点击=(%d,%d,%d) 物品ID=%d", seqID, px, py, pz, placeItem)
+			}
 		}
 		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 		id, r, err := c.ReadPacket()
@@ -189,6 +308,7 @@ func recordPlay(c *conn.Conn, suite *version.Suite, proto version.Protocol, seq 
 			_ = r.FixedBytes(24) // 速度增量
 			yaw, pitch := r.Float(), r.Float()
 			_ = r.FixedBytes(4) // flags
+			x, y, z = px, py, pz
 			pendingTeleport = teleportID
 			echoPos := proto >= 777 // 26.3 起确认包回显位置与朝向
 			c.WritePacket(suite.MustID("play", "serverbound", "minecraft:accept_teleportation"), func(w *protocol.Writer) {

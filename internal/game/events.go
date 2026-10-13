@@ -41,6 +41,32 @@ type PlayerCommand struct {
 	Args   []string
 }
 
+// BlockDig 玩家对方块的挖掘动作（核心已应用破坏后触发）。
+// Status: 0=开始 1=取消 2=完成；Broke 表示本次是否真的破坏了方块。
+type BlockDig struct {
+	Player   *entity.Player
+	X, Y, Z  int32
+	Status   int32
+	Face     int32
+	Sequence int32
+	Broke    bool
+	OldState uint32
+}
+
+// BlockPlace 玩家放置方块（核心已应用后触发）。State 为放置的方块状态，
+// 0 表示未放置（手持非方块物品或目标不可放置）。
+type BlockPlace struct {
+	Player        *entity.Player
+	X, Y, Z       int32 // 放置落点
+	AgainstX      int32 // 被点击的方块
+	AgainstY      int32
+	AgainstZ      int32
+	Face          int32
+	Sequence      int32
+	ItemID        int32
+	State         uint32
+}
+
 // Tick 每个游戏刻（50ms）触发。
 type Tick struct{ Count int64 }
 

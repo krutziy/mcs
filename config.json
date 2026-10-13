@@ -1,12 +1,9 @@
 {
   "port": 25565,
-  "motd": "§aGo MC §7| 类原版生存端 §8(26.3)",
+  "motd": "§a26.3 生存端·方块交互验证",
   "max_players": 20,
-  "view_distance": 5,
+  "view_distance": 4,
   "spawn": [8, 0, 8],
-  "gamemode": "survival",
-  "world": {
-    "type": "noise",
-    "seed": 20261010
-  }
+  "gamemode": "creative",
+  "world": { "type": "noise", "seed": 20261010 }
 }

@@ -4,6 +4,12 @@ import (
 	"mcserver/internal/protocol"
 )
 
+// Item 是玩家物品槽的最小描述（放置判定只需物品 ID 与数量）。
+type Item struct {
+	ID    int32 // 物品网络 ID（该玩家协议版本）
+	Count int32
+}
+
 // Player 是一个在线玩家的状态。所有字段只在游戏主循环 goroutine 中访问，
 // 会话读 goroutine 通过事件投递修改请求。
 type Player struct {
@@ -16,6 +22,14 @@ type Player struct {
 	OnGround   bool
 	Sneaking   bool
 	Sprinting  bool
+
+	// 快捷栏（仅创造模式物品包更新；用于放置时判定手持方块）
+	Hotbar   [9]Item
+	HeldSlot int32
+
+	// 区块视野跟踪（主循环维护：已发送区块集合与当前缓存中心）
+	SentChunks      map[[2]int32]bool
+	CenterCX, CenterCZ int32
 
 	// 同步状态
 	BroadcastX, BroadcastY, BroadcastZ float64 // 上次广播给他人的位置

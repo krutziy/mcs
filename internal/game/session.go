@@ -70,8 +70,28 @@ type playerKeepAliveEvent struct {
 }
 
 type playerTeleportConfirmEvent struct {
+	p   *entity.Player
+	id  int32
+}
+
+type blockDigEvent struct {
+	p    *entity.Player
+	act  packet.PlayerAction
+}
+
+type blockPlaceEvent struct {
+	p     *entity.Player
+	use   packet.UseItemOn
+}
+
+type playerHeldSlotEvent struct {
+	p    *entity.Player
+	slot int32
+}
+
+type playerCreativeSlotEvent struct {
 	p  *entity.Player
-	id int32
+	cs packet.CreativeSlot
 }
 
 // PlayLoop 阻塞处理 play 状态的入站包，直到连接断开。在独立 goroutine 中运行。
@@ -129,6 +149,14 @@ func (s *Session) PlayLoop() {
 			if len(parts) > 0 {
 				s.game.Submit(&playerCommandEvent{p: p, Name: parts[0], Args: parts[1:]})
 			}
+		case "minecraft:player_action":
+			s.game.Submit(&blockDigEvent{p: p, act: packet.ReadPlayerAction(pr)})
+		case "minecraft:use_item_on":
+			s.game.Submit(&blockPlaceEvent{p: p, use: packet.ReadUseItemOn(pr)})
+		case "minecraft:set_carried_item":
+			s.game.Submit(&playerHeldSlotEvent{p: p, slot: packet.ReadSetCarriedItem(pr)})
+		case "minecraft:set_creative_mode_slot":
+			s.game.Submit(&playerCreativeSlotEvent{p: p, cs: packet.ReadCreativeSlot(pr)})
 		default:
 			log.Printf("[session %s] 未处理包 %s (0x%02x, %d字节)", s.name, name, id, len(body))
 		}

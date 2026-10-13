@@ -5,6 +5,7 @@
 //	                             （id-only 条目，依赖客户端回显 minecraft:core）
 //	data/<proto>/known_packs.bin  select_known_packs 包体
 //	data/chunk_template.bin       26.1 平坦世界区块包体（黄金测试基准）
+//	data/itemblocks_<proto>.txt   物品 ID → 方块默认状态 ID 映射（genitemblocks 生成）
 package assets
 
 import (
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 //go:embed data
@@ -60,4 +62,28 @@ func ChunkTemplate() []byte {
 func ChunkTemplate774() []byte {
 	b, _ := files.ReadFile("data/chunk_template_774.bin")
 	return b[8:] // 去掉坐标
+}
+
+// ItemBlocks 返回指定协议版本的"物品网络 ID → 方块默认状态 ID"映射
+// （基准 777 状态空间；由 cmd/genitemblocks 从官方 reports 生成）。
+// 没有对应数据表的版本返回 nil（该版本玩家暂时无法放置方块）。
+func ItemBlocks(proto int32) map[int32]uint32 {
+	b, err := files.ReadFile(fmt.Sprintf("data/itemblocks_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[int32]uint32{}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		item, err1 := strconv.Atoi(fields[0])
+		state, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		m[int32(item)] = uint32(state)
+	}
+	return m
 }

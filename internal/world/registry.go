@@ -8,6 +8,12 @@ type Generator interface {
 	Generate(ch *Chunk)
 }
 
+// GeneratorFunc 把函数适配为 Generator（类似 http.HandlerFunc）。
+type GeneratorFunc func(ch *Chunk)
+
+// Generate 调用自身。
+func (f GeneratorFunc) Generate(ch *Chunk) { f(ch) }
+
 // VoidGenerator 生成全空（虚空）世界——空壳的默认形态。
 type VoidGenerator struct{}
 

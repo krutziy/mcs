@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"mcserver/internal/assets"
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
@@ -30,8 +31,8 @@ type Game struct {
 	Suite *version.Suite
 	Bus   *EventBus
 
-	events chan Event
-	joinCh chan *Session
+	events  chan Event
+	joinCh  chan *Session
 
 	players map[int32]*entity.Player
 	nextEID atomic.Int32
@@ -42,7 +43,12 @@ type Game struct {
 	dayTime  int64
 	clockID  int32 // 白天时钟 ID（官方录制为 1）
 
-	gen world.Generator
+	gen   world.Generator
+	world *world.Manager // 服务端权威方块状态（区块缓存）
+	// 物品网络 ID → 方块默认状态 ID（按协议版本；世界统一用 777 状态空间）
+	itemBlocks map[int32]map[int32]uint32
+	// 待广播的方块变更（位置 → 最新状态），flushBlockUpdates 消费
+	pendingBlocks map[[3]int32]uint32
 
 	closed atomic.Bool
 }
@@ -56,8 +62,18 @@ func New(cfg Config, suite *version.Suite) *Game {
 		events:         make(chan Event, 4096),
 		joinCh:         make(chan *Session, 64),
 		players:        map[int32]*entity.Player{},
-		dayTime: 6000, // 正午
-		clockID: 1,
+		dayTime:        6000, // 正午
+		clockID:        1,
+		itemBlocks:     map[int32]map[int32]uint32{},
+		pendingBlocks:  map[[3]int32]uint32{},
+	}
+	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
+	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
+	g.world = world.NewManager(g.gen)
+	for _, v := range version.All() {
+		if t := assets.ItemBlocks(int32(v.Protocol)); t != nil {
+			g.itemBlocks[int32(v.Protocol)] = t
+		}
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
 	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
@@ -145,6 +161,7 @@ func (g *Game) handleEvent(e Event) {
 		p.X, p.Y, p.Z = ev.x, ev.y, ev.z
 		p.Yaw, p.Pitch, p.OnGround = ev.yaw, ev.pitch, ev.onGround
 		g.syncMovement(p)
+		g.syncChunks(p)
 		g.Bus.emit(PlayerMoved{Player: p})
 	case *playerChatEvent:
 		if ev.p != nil {
@@ -163,7 +180,16 @@ func (g *Game) handleEvent(e Event) {
 		if ev.p != nil && ev.id == ev.p.TeleportID {
 			ev.p.TeleportID = -1
 		}
+	case *blockDigEvent:
+		g.handleDig(ev)
+	case *blockPlaceEvent:
+		g.handlePlace(ev)
+	case *playerHeldSlotEvent:
+		g.handleHeldSlot(ev)
+	case *playerCreativeSlotEvent:
+		g.handleCreativeSlot(ev)
 	}
+	g.flushBlockUpdates()
 }
 
 // handleJoin 完成进入世界流程并广播。
@@ -179,6 +205,7 @@ func (g *Game) handleJoin(s *Session) {
 		Send:     s,
 	}
 	p.BroadcastX, p.BroadcastY, p.BroadcastZ = p.X, p.Y, p.Z
+	p.SentChunks = map[[2]int32]bool{}
 	s.player.Store(p)
 	g.players[eid] = p
 	g.count.Store(int32(len(g.players)))
@@ -240,7 +267,7 @@ func (g *Game) handleJoin(s *Session) {
 		packet.WritePlayerInfoAdd(w, p.UUID, p.Name, g.Cfg.GameMode)
 	})
 
-	g.sendChunks(s, int32(g.Cfg.SpawnX)>>4, int32(g.Cfg.SpawnZ)>>4)
+	g.sendChunks(s, p, int32(g.Cfg.SpawnX)>>4, int32(g.Cfg.SpawnZ)>>4)
 
 	// 互相可见
 	for _, other := range g.players {
@@ -268,23 +295,23 @@ func (g *Game) handleJoin(s *Session) {
 	g.broadcastSystem(fmt.Sprintf("§e%s 加入了游戏", p.Name))
 }
 
-// sendChunks 以指定区块为中心，成批发送世界区块。
-func (g *Game) sendChunks(s *Session, cx, cz int32) {
+// sendChunks 以指定区块为中心向玩家成批发送区块（生成一次后从世界管理器取缓存）。
+func (g *Game) sendChunks(s *Session, p *entity.Player, cx, cz int32) {
 	r := g.Cfg.ViewDistance
 	s.SendPlay("minecraft:chunk_batch_start", func(w *protocol.Writer) {})
 	n := int32(0)
 	for dx := -r; dx <= r; dx++ {
 		for dz := -r; dz <= r; dz++ {
 			x, z := cx+dx, cz+dz
-			ch := world.NewChunk(x, z, 0)
-			g.gen.Generate(ch)
-			body := ch.EncodeBody(world.StyleFor(int32(s.suite.Version)))
+			body := g.world.Chunk(x, z).EncodeBody(world.StyleFor(int32(s.suite.Version)))
 			s.SendPlay("minecraft:level_chunk_with_light", func(w *protocol.Writer) {
 				packet.WriteLevelChunk(w, x, z, body)
 			})
+			p.SentChunks[[2]int32{x, z}] = true
 			n++
 		}
 	}
+	p.CenterCX, p.CenterCZ = cx, cz
 	s.SendPlay("minecraft:chunk_batch_finished", func(w *protocol.Writer) {
 		packet.WriteChunkBatchFinished(w, n)
 	})
