@@ -56,6 +56,38 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 	if p == nil {
 		return
 	}
+	// 熔炉窗口 2：独立路由
+	if ev.click.Window == 2 {
+		pos, ok := g.openFurnace[p.EntityID]
+		if !ok || g.furnaces[pos] == nil {
+			return
+		}
+		fs := g.furnaces[pos]
+		slot := int32(ev.click.Slot)
+		if ev.click.Mode == packet.ClickModeClick {
+			if ref := furnaceSlotRef(fs, p, slot); ref != nil {
+				if ev.click.Button == 0 {
+					leftClickSlotRef(p, ref)
+				} else if ev.click.Button == 1 {
+					rightClickSlotRef(p, ref)
+				}
+			}
+		} else if ev.click.Mode == packet.ClickModeThrow {
+			if ref := furnaceSlotRef(fs, p, slot); ref != nil && ref.ID != 0 {
+				n := int32(1)
+				if ev.click.Button != 0 {
+					n = ref.Count
+				}
+				g.dropFromHand(p, entity.Item{ID: ref.ID, Count: n}, 1)
+				ref.Count -= n
+				if ref.Count <= 0 {
+					*ref = entity.Item{}
+				}
+			}
+		}
+		g.syncFurnace(p, pos)
+		return
+	}
 	// 工作台窗口 1：独立路由
 	if ev.click.Window == 1 {
 		cs, ok := g.crafting[p.EntityID]

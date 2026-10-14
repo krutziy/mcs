@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -63,6 +65,10 @@ type Game struct {
 	recipes      []craftRecipe           // 合成配方（基准版本）
 	itemTags     map[string]map[string]bool // 物品标签（配方匹配用）
 	crafting     map[int32]*craftState     // 打开中的工作台（按玩家 EID）
+	furnaces     map[[3]int32]*furnaceState // 熔炉状态（按方块位置）
+	openFurnace  map[int32][3]int32        // 打开中的熔炉（玩家 EID → 位置）
+	smelting     map[string]string         // 冶炼表（777 基准）
+	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
 
 	closed atomic.Bool
@@ -80,6 +86,8 @@ func New(cfg Config, suite *version.Suite) *Game {
 		items:          map[int32]*itemEntity{},
 		mobs:           map[int32]*mob{},
 		crafting:       map[int32]*craftState{},
+		furnaces:       map[[3]int32]*furnaceState{},
+		openFurnace:    map[int32][3]int32{},
 		dayTime:        6000, // 正午
 		clockID:        1,
 		itemBlocks:     map[int32]map[int32]uint32{},
@@ -124,6 +132,9 @@ func New(cfg Config, suite *version.Suite) *Game {
 		if tg := assets.ItemTags(p); len(tg) > 0 {
 			g.itemTags = tg
 		}
+		if sm := assets.Smelting(p); len(sm) > 0 {
+			g.smelting = sm
+		}
 	}
 	// 775 无官方报告：借用相邻 776 的表
 	if g.entityTypes[775] == nil {
@@ -152,6 +163,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 				log.Printf("[game] 恢复世界时间 age=%d day=%d", g.worldAge, g.dayTime)
 			}
 		}
+		g.loadFurnaces()
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
 	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
@@ -221,6 +233,7 @@ func (g *Game) tickNow() {
 	g.tickItems()
 	g.tickMobs()
 	g.tickMobSpawning()
+	g.tickFurnaces()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒
@@ -244,6 +257,7 @@ func (g *Game) saveAll() {
 	// 时间存档（世界年龄 + 一天内时间）
 	mb, _ := json.Marshal(map[string]int64{"age": g.worldAge, "day": g.dayTime})
 	_ = os.WriteFile(filepath.Join(g.Cfg.SaveDir, "time.json"), mb, 0o644)
+	g.saveFurnaces()
 	for _, p := range g.players {
 		g.savePlayer(p)
 	}
@@ -315,6 +329,10 @@ func (g *Game) handleEvent(e Event) {
 	case *playerCloseCraftEvent:
 		if ev.p != nil {
 			g.closeCrafting(ev.p)
+		}
+	case *playerCloseFurnaceEvent:
+		if ev.p != nil {
+			g.closeFurnace(ev.p)
 		}
 	}
 	g.flushBlockUpdates()
@@ -400,6 +418,7 @@ func (g *Game) handleJoin(s *Session) {
 		TailApplies:         s.ver.LoginTrailingByte, // 26.3 起末尾多一个布尔
 	}
 	p.Health, p.Food, p.Saturation = 20, 20, 5
+	p.GameMode = int32(g.Cfg.GameMode)
 	s.SendPlay("minecraft:login", func(w *protocol.Writer) {
 		packet.WriteJoinGame(w, join)
 	})
@@ -522,6 +541,9 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 		return
 	}
 	g.closeCrafting(p)
+	if _, ok := g.openFurnace[p.EntityID]; ok {
+		g.closeFurnace(p)
+	}
 	delete(g.players, p.EntityID)
 	g.count.Store(int32(len(g.players)))
 	if g.Cfg.SaveDir != "" {
@@ -618,7 +640,101 @@ func (g *Game) checkKeepAlive() {
 // handleCommand 处理内置命令。
 func (g *Game) handleCommand(ev *playerCommandEvent) {
 	p := ev.p
+	reply := func(format string, a ...any) {
+		p.Send.SendPlay("minecraft:system_chat", func(w *protocol.Writer) {
+			packet.WriteSystemChat(w, fmt.Sprintf(format, a...), false)
+		})
+	}
 	switch ev.Name {
+	case "gamemode":
+		if len(ev.Args) < 1 {
+			reply("§7用法: /gamemode <survival|creative>")
+			break
+		}
+		mode := int32(packet.ModeSurvival)
+		if ev.Args[0] == "creative" || ev.Args[0] == "1" {
+			mode = int32(packet.ModeCreative)
+		} else if ev.Args[0] != "survival" && ev.Args[0] != "0" {
+			reply("§c未知模式: %s", ev.Args[0])
+			break
+		}
+		p.GameMode = mode
+		m := packet.GameMode(mode)
+		// 能力包 + 游戏状态同步
+		flags := uint8(0)
+		if m == packet.ModeCreative {
+			flags |= 0x04 | 0x08
+		}
+		p.Send.SendPlay("minecraft:player_abilities", func(w *protocol.Writer) {
+			packet.WriteAbilities(w, packet.Abilities{Flags: flags, FlyingSpeed: 0.05, WalkingSpeed: 0.1})
+		})
+		p.Send.SendPlay("minecraft:game_event", func(w *protocol.Writer) {
+			w.Int8(3) // 改变游戏模式
+			w.Float(float32(m))
+		})
+		reply("§7已将 %s 的游戏模式设为 %s", p.Name, ev.Args[0])
+	case "give":
+		if len(ev.Args) < 1 {
+			reply("§7用法: /give <物品名> [数量]")
+			break
+		}
+		id777, ok := assets.ItemIDs(777)[ev.Args[0]]
+		if !ok {
+			reply("§c未知物品: %s", ev.Args[0])
+			break
+		}
+		count := int32(1)
+		if len(ev.Args) > 1 {
+			if n, err := strconv.Atoi(ev.Args[1]); err == nil && n > 0 && n <= 6400 {
+				count = int32(n)
+			}
+		}
+		for count > 0 {
+			n := min32(itemMaxStack, count)
+			g.giveItem(p, entity.Item{ID: id777, Count: n})
+			count -= n
+		}
+		reply("§7已给予 %s ×%d", ev.Args[0], countOrOne(ev.Args))
+	case "tp":
+		if len(ev.Args) < 3 {
+			reply("§7用法: /tp <x> <y> <z>")
+			break
+		}
+		var x, y, z float64
+		if _, err := fmt.Sscan(strings.Join(ev.Args[:3], " "), &x, &y, &z); err != nil {
+			reply("§c坐标格式错误")
+			break
+		}
+		p.X, p.Y, p.Z = x, y, z
+		p.TeleportID++
+		id := p.TeleportID
+		p.Send.SendPlay("minecraft:player_position", func(w *protocol.Writer) {
+			packet.WritePlayerPosition(w, packet.PlayerPositionOut{TeleportID: id, X: x, Y: y, Z: z})
+		})
+		g.syncChunks(p)
+		reply("§7已传送到 (%.1f, %.1f, %.1f)", x, y, z)
+	case "time":
+		if len(ev.Args) < 2 || ev.Args[0] != "set" {
+			reply("§7用法: /time set <day|night|数值>")
+			break
+		}
+		switch ev.Args[1] {
+		case "day":
+			g.dayTime = 1000
+		case "night":
+			g.dayTime = 13000
+		default:
+			if n, err := strconv.Atoi(ev.Args[1]); err == nil && n >= 0 && n < 24000 {
+				g.dayTime = int64(n)
+			} else {
+				reply("§c无效时间")
+				break
+			}
+		}
+		g.broadcastTime()
+		reply("§7时间已设为 %d", g.dayTime)
+	case "kill":
+		g.damage(p, 1000, damageGeneric)
 	case "list":
 		names := ""
 		for _, other := range g.players {
@@ -640,7 +756,7 @@ func (g *Game) handleCommand(ev *playerCommandEvent) {
 		})
 	case "help":
 		p.Send.SendPlay("minecraft:system_chat", func(w *protocol.Writer) {
-			packet.WriteSystemChat(w, "§7可用命令: /list /spawn /help", false)
+			packet.WriteSystemChat(w, "§7可用命令: /list /spawn /gamemode /give /tp /time /kill /help", false)
 		})
 	default:
 		p.Send.SendPlay("minecraft:system_chat", func(w *protocol.Writer) {
@@ -650,3 +766,13 @@ func (g *Game) handleCommand(ev *playerCommandEvent) {
 	g.Bus.emit(PlayerCommand{Player: p, Name: ev.Name, Args: ev.Args})
 }
 
+
+// countOrOne give 命令回显数量。
+func countOrOne(args []string) int32 {
+	if len(args) > 1 {
+		if n, err := strconv.Atoi(args[1]); err == nil && n > 0 {
+			return int32(n)
+		}
+	}
+	return 1
+}

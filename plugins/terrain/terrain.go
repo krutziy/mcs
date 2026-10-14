@@ -84,6 +84,7 @@ func (g *NoiseGenerator) Generate(ch *world.Chunk) {
 			}
 		}
 	}
+	g.plantTrees(ch)
 }
 
 // HeightAt 返回 (x,z) 的地表相对高度（0..WorldHeight-1，相对 min_y）。
@@ -139,4 +140,66 @@ func hash2(ix, iy, seed int64) float64 {
 func init() {
 	world.RegisterGenerator("flat", func(seed int64) world.Generator { return FlatGenerator{} })
 	world.RegisterGenerator("noise", func(seed int64) world.Generator { return DefaultNoise(seed) })
+}
+
+// 橡树方块状态（777 基准，官方 reports）。
+const (
+	stateOakLog      uint32 = 8070
+	stateOakLeaves   uint32 = 209
+)
+
+// treeAt 确定性判定某列是否长树（约 1/64 概率，且在岸边之上）。
+func (g *NoiseGenerator) treeAt(wx, wz int32) bool {
+	if g.valueNoise(float64(wx)*0.7, float64(wz)*0.7, g.Seed+999) < 0.72 {
+		return false
+	}
+	h := g.HeightAt(wx, wz)
+	return h > g.SeaLevel+2 && h < world.WorldHeight-90
+}
+
+// plantTrees 在区块内种树（跨区块树冠简化为不越界）。
+func (g *NoiseGenerator) plantTrees(ch *world.Chunk) {
+	for z := int32(2); z < 14; z++ {
+		for x := int32(2); x < 14; x++ {
+			wx, wz := ch.CX*16+x, ch.CZ*16+z
+			if !g.treeAt(wx, wz) {
+				continue
+			}
+			h := g.HeightAt(wx, wz)
+			// 树干 4-6 格
+			trunk := int32(4 + int(g.valueNoise(float64(wx), float64(wz), g.Seed+5)*3))
+			for t := int32(1); t <= trunk; t++ {
+				ch.SetBlock(x, h+t, z, stateOakLog)
+			}
+			top := h + trunk
+			// 树冠：顶部十字 + 下方两层 5×5（去角）
+			for dy := int32(-2); dy <= 0; dy++ {
+				r := int32(2)
+				if dy == 0 {
+					r = 1
+				}
+				for dx := -r; dx <= r; dx++ {
+					for dz := -r; dz <= r; dz++ {
+						if dx == 0 && dz == 0 && dy < 0 {
+							continue
+						}
+						if abs(dx) == r && abs(dz) == r && dy != 0 {
+							continue
+						}
+						if ch.GetBlock(x+dx, top+dy, z+dz) == world.StateAir {
+							ch.SetBlock(x+dx, top+dy, z+dz, stateOakLeaves)
+						}
+					}
+				}
+			}
+			ch.SetBlock(x, top+1, z, stateOakLeaves)
+		}
+	}
+}
+
+func abs(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

@@ -37,6 +37,9 @@ type Player struct {
 	SentChunks      map[[2]int32]bool
 	CenterCX, CenterCZ int32
 
+	// GameMode 该玩家的游戏模式（1=创造 0=生存；默认继承服务器配置）
+	GameMode int32
+
 	// 生命值/饥饿（主循环独占；创造模式免疫伤害）
 	Health      float32
 	Food        int32

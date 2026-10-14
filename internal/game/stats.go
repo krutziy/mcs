@@ -29,7 +29,7 @@ func (g *Game) syncHealth(p *entity.Player) {
 // damage 对玩家施加伤害：扣血、发 damage_event（本人）+ 受击动画（旁观者），
 // 归零则进入死亡流程。创造模式免疫。
 func (g *Game) damage(p *entity.Player, amount float32, sourceType int32) {
-	if p.Dead || g.Cfg.GameMode == packet.ModeCreative || amount <= 0 {
+	if p.Dead || g.isCreative(p) || amount <= 0 {
 		return
 	}
 	if p.Health > amount {
@@ -89,7 +89,7 @@ func (g *Game) handleRespawn(p *entity.Player) {
 	p.Send.SendPlay("minecraft:respawn", func(w *protocol.Writer) {
 		packet.WriteRespawn(w, packet.Respawn{
 			DimensionID: 0, WorldName: "minecraft:overworld",
-			HashedSeed: 0, GameMode: g.Cfg.GameMode, PreviousGameMode: -1,
+			HashedSeed: 0, GameMode: packet.GameMode(p.GameMode), PreviousGameMode: -1,
 			IsFlat: true, PortalCooldown: 0, SeaLevel: -63,
 			DataKept: false, TailApplies: showTail,
 		})
@@ -115,7 +115,7 @@ func (g *Game) tickStats() {
 		return
 	}
 	for _, p := range g.players {
-		if p.Dead || g.Cfg.GameMode == packet.ModeCreative {
+		if p.Dead || g.isCreative(p) {
 			continue
 		}
 		switch {
@@ -137,7 +137,7 @@ func (g *Game) tickStats() {
 
 // exhaustMovement 按移动距离累积体力消耗（走 0.01/格，疾跑 0.1/格的简化）。
 func (g *Game) exhaustMovement(p *entity.Player, dx, dz float64, sprint bool) {
-	if p.Dead || g.Cfg.GameMode == packet.ModeCreative {
+	if p.Dead || g.isCreative(p) {
 		return
 	}
 	p.Exhaustion += (dx*dx + dz*dz) * map[bool]float64{false: 0.01, true: 0.1}[sprint]
@@ -154,7 +154,7 @@ func (g *Game) exhaustMovement(p *entity.Player, dx, dz float64, sprint bool) {
 
 // trackFall 由移动事件推进摔落追踪：记录下落起点，落地结算伤害。
 func (g *Game) trackFall(p *entity.Player, y float64, onGround bool) {
-	if g.Cfg.GameMode == packet.ModeCreative || p.Dead {
+	if g.isCreative(p) || p.Dead {
 		p.FallStart = 0
 		return
 	}

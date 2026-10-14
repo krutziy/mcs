@@ -34,7 +34,7 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	if !start && !finish {
 		return // 取消 / 丢物品等：仅通知插件
 	}
-	if start && g.Cfg.GameMode != packet.ModeCreative {
+	if start && !g.isCreative(p) {
 		return // 生存模式 start 只开始进度，等 finish 再破坏
 	}
 	if !g.inDigRange(p, a.X, a.Y, a.Z) {
@@ -52,10 +52,11 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 			packet.WriteLevelEvent(w, levelEventBlockBreak, a.X, a.Y, a.Z, int32(data), false)
 		})
 	}
+	g.dropFurnaceContents([3]int32{a.X, a.Y, a.Z})
 	g.applyBlock(a.X, a.Y, a.Z, world.StateAir, a.Sequence, p)
 	bus.Broke = true
 	// 生存模式：按掉落表生成掉落物（需镐方块还要材质门槛）
-	if g.Cfg.GameMode != packet.ModeCreative {
+	if !g.isCreative(p) {
 		bus.Drops = g.digDrops(p, old)
 		for _, d := range bus.Drops {
 			g.spawnItem(float64(a.X)+0.5, float64(a.Y)+0.5, float64(a.Z)+0.5, d)
@@ -89,7 +90,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		return
 	}
 	u := ev.use
-	if g.tryOpenCrafting(p, u) {
+	if g.tryOpenCrafting(p, u) || g.tryOpenFurnace(p, u) {
 		return
 	}
 	dx, dy, dz := packet.FaceOffset(u.Face)
@@ -121,7 +122,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	g.applyBlock(tx, ty, tz, state, u.Sequence, p)
 	bus.State, bus.ItemID = state, held.ID
 	// 生存模式：放置消耗一个手持物品
-	if g.Cfg.GameMode != packet.ModeCreative {
+	if !g.isCreative(p) {
 		s := &p.Slots[36+p.HeldSlot]
 		s.Count--
 		if s.Count <= 0 {
@@ -281,6 +282,14 @@ func (g *Game) syncChunks(p *entity.Player) {
 			p.SentChunks[key] = true
 		}
 	}
+}
+
+// isCreative 该玩家当前是否为创造模式。
+func (g *Game) isCreative(p *entity.Player) bool {
+	if p == nil {
+		return g.Cfg.GameMode == packet.ModeCreative
+	}
+	return packet.GameMode(p.GameMode) == packet.ModeCreative
 }
 
 // playerProto 返回玩家连接的协议版本号。

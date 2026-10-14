@@ -281,3 +281,19 @@ func ItemTags(proto int32) map[string]map[string]bool {
 	}
 	return m
 }
+
+// Smelting 返回冶炼表（输入物品短名 → 产物短名，777 基准）。
+func Smelting(proto int32) map[string]string {
+	b, err := files.ReadFile(fmt.Sprintf("data/smelting_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) == 2 {
+			m[parts[0]] = parts[1]
+		}
+	}
+	return m
+}

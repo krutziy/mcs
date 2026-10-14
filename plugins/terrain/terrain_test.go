@@ -77,7 +77,7 @@ func TestNoiseChunkStructure(t *testing.T) {
 	if s := ch.GetBlock(8, h, 8); s != world.StateGrassBlock && s != world.StateSand {
 		t.Errorf("地表方块 = %d", s)
 	}
-	if s := ch.GetBlock(8, h+1, 8); s != world.StateAir && s != world.StateWater {
+	if s := ch.GetBlock(8, h+1, 8); s != world.StateAir && s != world.StateWater && s != stateOakLog && s != stateOakLeaves {
 		t.Errorf("地表上方 = %d", s)
 	}
 }

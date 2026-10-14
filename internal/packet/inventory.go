@@ -114,3 +114,11 @@ func WriteOpenScreen(w *protocol.Writer, menuType int32, title string) {
 func WriteContainerClose(w *protocol.Writer, window int32) {
 	w.VarInt(window)
 }
+
+// WriteContainerSetData 写入 clientbound container_set_data：
+// VarInt 窗口 + Short 属性 + Short 值（熔炉火/进度条）。
+func WriteContainerSetData(w *protocol.Writer, window int32, property int16, value int16) {
+	w.VarInt(window)
+	w.Int16(property)
+	w.Int16(value)
+}

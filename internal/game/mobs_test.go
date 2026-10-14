@@ -1,6 +1,7 @@
 package game
 
 import (
+	"os"
 	"testing"
 
 	"mcserver/internal/assets"
@@ -268,4 +269,128 @@ func TestOpenCrafting(t *testing.T) {
 	if fs.find("minecraft:container_close") == nil {
 		t.Fatal("应发送 container_close")
 	}
+}
+
+// TestFurnaceSmelting 熔炉全流程：放沙+煤 → 点火亮方块 → 冶出玻璃 → 熄灭。
+func TestFurnaceSmelting(t *testing.T) {
+	g, p, fs := newMobGame(t)
+	g.smelting = assets.Smelting(777)
+	g.itemTags = assets.ItemTags(777)
+	if g.smelting["sand"] != "glass" {
+		t.Fatal("冶炼表缺 沙→玻璃")
+	}
+	ids := assets.ItemIDs(777)
+
+	g.world.SetBlock(8, -61, 8, furnaceUnlit)
+	if !g.tryOpenFurnace(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1}) {
+		t.Fatal("右键熔炉应打开")
+	}
+	if fs.find("minecraft:open_screen") == nil {
+		t.Fatal("应发送 open_screen")
+	}
+	pos := [3]int32{8, -61, 8}
+	fu := g.furnaces[pos]
+	fu.input = entity.Item{ID: ids["sand"], Count: 2}
+	fu.fuel = entity.Item{ID: ids["coal"], Count: 1}
+
+	for i := 0; i < 210; i++ {
+		g.tickFurnaces()
+	}
+	glass := ids["glass"]
+	if fu.output.ID != glass || fu.output.Count != 1 {
+		t.Fatalf("应炼出 1 玻璃: %+v", fu.output)
+	}
+	if fu.input.Count != 1 {
+		t.Fatalf("应消耗 1 沙: %d", fu.input.Count)
+	}
+	if got := g.world.GetBlock(8, -61, 8); got != furnaceLit {
+		t.Fatalf("燃烧中应为亮熔炉状态: %d", got)
+	}
+	// 烧完煤（1600 刻）后熄灭
+	for i := 0; i < 1700; i++ {
+		g.tickFurnaces()
+	}
+	if got := g.world.GetBlock(8, -61, 8); got != furnaceUnlit {
+		t.Fatalf("燃料耗尽应熄灭: %d", got)
+	}
+}
+
+// TestFurnacePersistence 熔炉状态存取往返。
+func TestFurnacePersistence(t *testing.T) {
+	dir, err := os.MkdirTemp("", "furn-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	g, _, _ := newTestGame(packet.ModeSurvival)
+	g.Cfg.SaveDir = dir
+	g.smelting = assets.Smelting(777)
+	ids := assets.ItemIDs(777)
+	g.furnaces[[3]int32{1, 2, 3}] = &furnaceState{
+		input: entity.Item{ID: ids["sand"], Count: 5}, burn: 99, burnMax: 100, cook: 42}
+	g.saveFurnaces()
+
+	g2, _, _ := newTestGame(packet.ModeSurvival)
+	g2.Cfg.SaveDir = dir
+	g2.smelting = assets.Smelting(777)
+	g2.loadFurnaces()
+	fu := g2.furnaces[[3]int32{1, 2, 3}]
+	if fu == nil || fu.input.Count != 5 || fu.cook != 42 {
+		t.Fatalf("熔炉读档不符: %+v", fu)
+	}
+}
+
+// TestFurnaceDropOnBreak 挖掉熔炉掉落内容物。
+func TestFurnaceDropOnBreak(t *testing.T) {
+	g, p, _ := newMobGame(t)
+	g.smelting = assets.Smelting(777)
+	ids := assets.ItemIDs(777)
+	g.world.SetBlock(8, -60, 8, furnaceUnlit)
+	pos := [3]int32{8, -60, 8}
+	g.furnaces[pos] = &furnaceState{input: entity.Item{ID: ids["sand"], Count: 3}}
+	g.handleDig(&blockDigEvent{p: p, act: packet.PlayerAction{Status: packet.DigFinish, X: 8, Y: -60, Z: 8, Sequence: 1}})
+	if _, exists := g.furnaces[pos]; exists {
+		t.Fatal("挖掉后熔炉状态应删除")
+	}
+	if len(g.items) != 1 {
+		t.Fatalf("应掉落内容物: %d", len(g.items))
+	}
+}
+
+// TestAdminCommands 管理命令：gamemode/give/tp/time。
+func TestAdminCommands(t *testing.T) {
+	g, p, fs := newMobGame(t)
+	g.itemTags = assets.ItemTags(777)
+	ids := assets.ItemIDs(777)
+	if g.itemNames[777] == nil {
+		g.itemNames[777] = map[int32]string{}
+	}
+	for name, id := range ids {
+		g.itemNames[777][id] = name
+	}
+
+	g.handleCommand(&playerCommandEvent{p: p, Name: "gamemode", Args: []string{"creative"}})
+	if !g.isCreative(p) {
+		t.Fatal("/gamemode creative 应生效")
+	}
+	g.handleCommand(&playerCommandEvent{p: p, Name: "gamemode", Args: []string{"survival"}})
+	if g.isCreative(p) {
+		t.Fatal("/gamemode survival 应生效")
+	}
+
+	g.handleCommand(&playerCommandEvent{p: p, Name: "give", Args: []string{"diamond", "5"}})
+	if p.Slots[36].ID != ids["diamond"] || p.Slots[36].Count != 5 {
+		t.Fatalf("/give 应给 5 钻石: %+v", p.Slots[36])
+	}
+
+	g.handleCommand(&playerCommandEvent{p: p, Name: "tp", Args: []string{"100", "-50", "-200"}})
+	if p.X != 100 || p.Z != -200 {
+		t.Fatal("/tp 应改坐标")
+	}
+
+	g.handleCommand(&playerCommandEvent{p: p, Name: "time", Args: []string{"set", "night"}})
+	if g.dayTime != 13000 {
+		t.Fatal("/time set night 应生效")
+	}
+	_ = fs
 }

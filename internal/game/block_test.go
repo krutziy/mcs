@@ -72,6 +72,8 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		items:         map[int32]*itemEntity{},
 		mobs:          map[int32]*mob{},
 		crafting:      map[int32]*craftState{},
+		furnaces:      map[[3]int32]*furnaceState{},
+		openFurnace:   map[int32][3]int32{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}
@@ -83,6 +85,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		SentChunks: map[[2]int32]bool{{0, 0}: true},
 	}
 	p.Health, p.Food, p.Saturation = 20, 20, 5
+	p.GameMode = int32(mode)
 	g.players[1] = p
 	return g, p, fs
 }
