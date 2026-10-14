@@ -156,3 +156,41 @@ func TestMobSpawningDaylight(t *testing.T) {
 		}
 	}
 }
+
+// TestCraft2x2 随身合成：木棍×2 竖排无法 2x2 匹配；火把（炭+木棍）可合成。
+func TestCraft2x2(t *testing.T) {
+	g, p, _ := newMobGame(t)
+	g.recipes = loadRecipes(777)
+	if len(g.recipes) == 0 {
+		t.Fatal("recipes 资产缺失")
+	}
+	ids := assets.ItemIDs(777)
+	if g.itemNames[777] == nil {
+		g.itemNames[777] = map[int32]string{}
+	}
+	for name, id := range ids {
+		g.itemNames[777][id] = name
+	}
+	button, ok := ids["acacia_button"]
+	if !ok {
+		t.Fatal("物品表缺金合欢木按钮")
+	}
+	// 用无标签子集里的金合欢木按钮（单格金合欢木板）验证
+	if name, n := g.matchRecipe(p); name != "" || n != 0 {
+		t.Fatal("空网格不应匹配")
+	}
+	p.Slots[1] = entity.Item{ID: ids["acacia_planks"], Count: 5}
+	name, n := g.matchRecipe(p)
+	if name != "acacia_button" || n != 1 {
+		t.Fatalf("应匹配金合欢木按钮: %s x%d", name, n)
+	}
+	if !g.takeCraftResult(p) {
+		t.Fatal("应可取结果")
+	}
+ 	if p.Cursor.ID != button || p.Cursor.Count != n {
+		t.Fatalf("光标应为金合欢木按钮×%d: %+v", n, p.Cursor)
+	}
+ 	if p.Slots[1].Count != 4 {
+		t.Fatal("材料应扣 1")
+	}
+}

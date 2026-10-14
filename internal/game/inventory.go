@@ -62,6 +62,10 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 
 	switch c.Mode {
 	case packet.ClickModeClick:
+		if slot == 0 && g.takeCraftResult(p) { // 随身合成结果槽
+			g.syncInventory(p)
+			return
+		}
 		switch {
 		case slot == -999: // 点击窗口外：丢弃光标
 			if p.Cursor.ID != 0 {

@@ -60,6 +60,7 @@ type Game struct {
 	items         map[int32]*itemEntity     // 掉落物实体（item.ID 恒为 777 基准）
 	mobs          map[int32]*mob           // 生物实体
 	mobDrops      map[string]int32         // 生物 → 掉落物品（777 基准）
+	recipes      []craftRecipe           // 合成配方（基准版本）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
 
 	closed atomic.Bool

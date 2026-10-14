@@ -251,3 +251,8 @@ func ItemMap(proto int32) map[int32]int32 {
 	loadTranslate()
 	return itemMaps[proto]
 }
+
+// RecipeFile 返回指定协议的合成配方表原始内容。
+func RecipeFile(proto int32) ([]byte, error) {
+	return files.ReadFile(fmt.Sprintf("data/recipes_%d.txt", proto))
+}
