@@ -269,6 +269,40 @@ func main() {
 		pickaxeLines = append(pickaxeLines, fmt.Sprintf("%d %d", id, bit))
 	}
 
+	// --- 生物掉落表（loot_table/entities/<mob>.json 首个物品，数量 1 简化）---
+	var mobLines []string
+	entNames := make([]string, 0, 24)
+	for _, n := range []string{"pig", "sheep", "cow", "chicken", "rabbit", "zombie",
+		"skeleton", "spider", "creeper", "enderman"} {
+		entNames = append(entNames, n)
+	}
+	for _, short := range entNames {
+		var t lootTable
+		if !readZipJSON(z, "data/minecraft/loot_table/entities/"+short+".json", &t) {
+			continue
+		}
+		drop := ""
+		for _, pool := range t.Pools {
+			for _, e := range pool.Entries {
+				if n := plainDrop(e); n != "" {
+					drop = n
+					break
+				}
+			}
+			if drop != "" {
+				break
+			}
+		}
+		if drop == "" {
+			continue
+		}
+		id, ok := itemID[drop]
+		if !ok {
+			continue
+		}
+		mobLines = append(mobLines, fmt.Sprintf("%s %d", short, id))
+	}
+
 	write := func(name string, lines []string) {
 		path := filepath.Join(*outDir, name)
 		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
@@ -283,4 +317,5 @@ func main() {
 	write(fmt.Sprintf("blockdrops_%d.txt", *proto), dropLines)
 	write(fmt.Sprintf("mineable_%d.txt", *proto), mineableLines)
 	write(fmt.Sprintf("pickaxes_%d.txt", *proto), pickaxeLines)
+	write(fmt.Sprintf("mobdrops_%d.txt", *proto), mobLines)
 }

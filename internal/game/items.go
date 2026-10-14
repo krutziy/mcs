@@ -195,6 +195,11 @@ func min32(a, b int32) int32 {
 	return b
 }
 
+func dist2(x1, y1, z1, x2, y2, z2 float64) float64 {
+	dx, dy, dz := x1-x2, y1-y2, z1-z2
+	return dx*dx + dy*dy + dz*dz
+}
+
 func floorI(v float64) int32 { return int32(math.Floor(v)) }
 
 func absF(v float64) float64 {

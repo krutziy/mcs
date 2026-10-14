@@ -99,6 +99,11 @@ func ItemIDs(proto int32) map[string]int32 {
 	return loadTextTable(proto, "itemid")
 }
 
+// MobDrops 返回生物掉落表（短名 → 掉落物品网络 ID，777 基准空间）。
+func MobDrops(proto int32) map[string]int32 {
+	return loadTextTable(proto, "mobdrops")
+}
+
 // BlockDrops 返回方块默认状态 → 掉落物品网络 ID（cmd/gendrops 生成，仅基准版本）。
 func BlockDrops(proto int32) map[uint32]int32 {
 	b, err := files.ReadFile(fmt.Sprintf("data/blockdrops_%d.txt", proto))

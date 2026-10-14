@@ -58,6 +58,8 @@ type Game struct {
 	itemToCanon   map[int32]map[int32]int32 // 玩家协议物品 ID → 777 基准 ID（反向翻译表）
 	itemNames     map[int32]map[int32]string // 玩家协议物品 ID → 物品短名（进食判定）
 	items         map[int32]*itemEntity     // 掉落物实体（item.ID 恒为 777 基准）
+	mobs          map[int32]*mob           // 生物实体
+	mobDrops      map[string]int32         // 生物 → 掉落物品（777 基准）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
 
 	closed atomic.Bool
@@ -73,6 +75,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		joinCh:         make(chan *Session, 64),
 		players:        map[int32]*entity.Player{},
 		items:          map[int32]*itemEntity{},
+		mobs:           map[int32]*mob{},
 		dayTime:        6000, // 正午
 		clockID:        1,
 		itemBlocks:     map[int32]map[int32]uint32{},
@@ -107,6 +110,9 @@ func New(cfg Config, suite *version.Suite) *Game {
 				rev[id] = name
 			}
 			g.itemNames[p] = rev
+		}
+		if md := assets.MobDrops(p); len(md) > 0 {
+			g.mobDrops = md
 		}
 	}
 	// 775 无官方报告：借用相邻 776 的表
@@ -203,6 +209,8 @@ func (g *Game) tickNow() {
 	g.dayTime = (g.dayTime + 1) % 24000
 
 	g.tickItems()
+	g.tickMobs()
+	g.tickMobSpawning()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒
@@ -292,6 +300,8 @@ func (g *Game) handleEvent(e Event) {
 		}
 	case *playerUseItemEvent:
 		g.handleUseItem(ev)
+	case *playerAttackEvent:
+		g.handleAttack(ev)
 	}
 	g.flushBlockUpdates()
 }
@@ -422,6 +432,14 @@ func (g *Game) handleJoin(s *Session) {
 	g.sendChunks(s, p, int32(g.Cfg.SpawnX)>>4, int32(g.Cfg.SpawnZ)>>4)
 	g.syncInventory(p) // 初始物品栏同步
 	g.syncHealth(p)    // 初始生命/食物同步
+
+	// 视距内已有的生物补给新玩家
+	for _, m := range g.mobs {
+		if abs32(int32(m.x)>>4-int32(p.X)>>4) <= g.Cfg.ViewDistance &&
+			abs32(int32(m.z)>>4-int32(p.Z)>>4) <= g.Cfg.ViewDistance {
+			g.sendMobSpawn(p, m)
+		}
+	}
 
 	// 视距内已有的掉落物补给新玩家
 	for _, ie := range g.items {

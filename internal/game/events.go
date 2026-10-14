@@ -28,6 +28,12 @@ type PlayerQuit struct {
 // PlayerDied 玩家生命值归零（死亡动画已广播）后触发。
 type PlayerDied struct{ Player *entity.Player }
 
+// MobKilled 生物被玩家杀死（掉落已生成）后触发。
+type MobKilled struct {
+	Player *entity.Player
+	Kind   string
+}
+
 // PlayerMoved 玩家位置更新（已写入 Player 字段）后触发。
 type PlayerMoved struct{ Player *entity.Player }
 

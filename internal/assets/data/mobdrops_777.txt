@@ -1,0 +1,10 @@
+pig 1097
+sheep 1415
+cow 1133
+chicken 1063
+rabbit 1404
+zombie 1264
+skeleton 1009
+spider 1062
+creeper 1064
+enderman 1265

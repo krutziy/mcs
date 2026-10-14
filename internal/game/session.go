@@ -109,6 +109,11 @@ type playerUseItemEvent struct {
 	sequence int32
 }
 
+type playerAttackEvent struct {
+	p      *entity.Player
+	target int32
+}
+
 // PlayLoop 阻塞处理 play 状态的入站包，直到连接断开。在独立 goroutine 中运行。
 func (s *Session) PlayLoop() {
 	s.game.JoinSession(s)
@@ -181,6 +186,8 @@ func (s *Session) PlayLoop() {
 		case "minecraft:use_item":
 			ev := &playerUseItemEvent{p: p, hand: pr.VarInt(), sequence: pr.VarInt()}
 			s.game.Submit(ev)
+		case "minecraft:attack":
+			s.game.Submit(&playerAttackEvent{p: p, target: pr.VarInt()})
 		case "minecraft:client_tick_end", "minecraft:player_loaded", "minecraft:punch",
 			"minecraft:move_vehicle", "minecraft:player_input":
 			// 活体心跳/输入流：无需处理
