@@ -68,7 +68,7 @@ func (g *Game) matchRecipe(p *entity.Player) (string, int32) {
 		}
 	}
 	for _, rec := range g.recipes {
-		if fits2x2(rec.grid, grid) {
+		if g.fits2x2(rec.grid, grid) {
 			return rec.result, rec.count
 		}
 	}
@@ -76,7 +76,7 @@ func (g *Game) matchRecipe(p *entity.Player) (string, int32) {
 }
 
 // fits2x2 判断 3x3 配方能否由 2x2 网格满足（双方有效格集合一致）。
-func fits2x2(rec [3][3]string, grid [2][2]string) bool {
+func (g *Game) fits2x2(rec [3][3]string, grid [2][2]string) bool {
 	// 配方的有效格集合
 	recCells := map[[2]int]string{}
 	for r := 0; r < 3; r++ {
@@ -116,7 +116,7 @@ func fits2x2(rec [3][3]string, grid [2][2]string) bool {
 		shifted[np] = v
 	}
 	for pos, v := range gridCells {
-		if shifted[pos] != v {
+		if !g.cellMatch(shifted[pos], v) {
 			return false
 		}
 	}
@@ -152,4 +152,15 @@ func (g *Game) takeCraftResult(p *entity.Player) bool {
 		}
 	}
 	return true
+}
+
+// cellMatch 判断网格物品名是否满足配方格值（"+tag:X" = 物品标签成员）。
+func (g *Game) cellMatch(spec, name string) bool {
+	if spec == name {
+		return true
+	}
+	if strings.HasPrefix(spec, "+tag:") {
+		return g.itemTags[strings.TrimPrefix(spec, "+tag:")][name]
+	}
+	return false
 }

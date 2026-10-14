@@ -194,3 +194,78 @@ func TestCraft2x2(t *testing.T) {
 		t.Fatal("材料应扣 1")
 	}
 }
+
+// TestCraftTable3x3 工作台：木镐配方（3 木板类 + 2 木棍，含标签格）。
+func TestCraftTable3x3(t *testing.T) {
+	g, p, fs := newMobGame(t)
+	g.recipes = loadRecipes(777)
+	g.itemTags = assets.ItemTags(777)
+	if g.itemTags == nil {
+		t.Fatal("itemtags 资产缺失")
+	}
+	ids := assets.ItemIDs(777)
+	if g.itemNames[777] == nil {
+		g.itemNames[777] = map[int32]string{}
+	}
+	for name, id := range ids {
+		g.itemNames[777][id] = name
+	}
+	g.crafting[p.EntityID] = &craftState{}
+	cs := g.crafting[p.EntityID]
+	// 木镐：顶行 3 木板（任意木板，用 oak），中/下行木棍居中
+	planks, sticks := ids["oak_planks"], ids["stick"]
+	for c := 0; c < 3; c++ {
+		cs.grid[c] = entity.Item{ID: planks, Count: 3}
+	}
+	cs.grid[4] = entity.Item{ID: sticks, Count: 2}
+	cs.grid[7] = entity.Item{ID: sticks, Count: 2}
+
+	name, n := g.matchRecipe3(p, cs)
+	if name != "wooden_pickaxe" || n != 1 {
+		t.Fatalf("应匹配木镐: %q x%d", name, n)
+	}
+	if !g.takeCraftResult3(p, cs) {
+		t.Fatal("应可取结果")
+	}
+	if pick, ok := ids["wooden_pickaxe"]; !ok || p.Cursor.ID != pick {
+		t.Fatalf("光标应为木镐: %+v", p.Cursor)
+	}
+	if cs.grid[0].Count != 2 || cs.grid[4].Count != 1 {
+		t.Fatal("材料应各扣 1")
+	}
+	// 同网格用 2x2 匹配器不应误匹配（超出 2x2 布局）
+	if name2, _ := g.matchRecipe(p); name2 == "wooden_pickaxe" {
+		t.Error("木镐 3x3 配方不应被随身合成匹配")
+	}
+	_ = fs
+}
+
+// TestOpenCrafting 右键工作台方块打开窗口，关闭时材料退回。
+func TestOpenCrafting(t *testing.T) {
+	g, p, fs := newMobGame(t)
+	g.recipes = loadRecipes(777)
+	g.itemTags = assets.ItemTags(777)
+	ids := assets.ItemIDs(777)
+	tableState, ok := g.itemBlocks[777][ids["crafting_table"]]
+	if !ok {
+		t.Fatal("无工作台映射")
+	}
+	g.world.SetBlock(8, -61, 8, tableState)
+
+	opened := g.tryOpenCrafting(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1, Sequence: 1})
+	if !opened {
+		t.Fatal("右键工作台应打开窗口")
+	}
+	if fs.find("minecraft:open_screen") == nil {
+		t.Fatal("应发送 open_screen")
+	}
+	cs := g.crafting[p.EntityID]
+	cs.grid[0] = entity.Item{ID: ids["oak_planks"], Count: 7}
+	g.closeCrafting(p)
+	if p.Slots[36].ID != ids["oak_planks"] || p.Slots[36].Count != 7 {
+		t.Fatal("关闭工作台材料应退回背包")
+	}
+	if fs.find("minecraft:container_close") == nil {
+		t.Fatal("应发送 container_close")
+	}
+}

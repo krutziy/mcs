@@ -45,6 +45,7 @@ type Conn struct {
 	writeMu     sync.Mutex
 	wbuf        *bufio.Writer
 	compression int32 // -1 表示未启用压缩
+	enc, dec    *cfb8 // AES-CFB8（nil = 未加密）
 
 	state State
 }

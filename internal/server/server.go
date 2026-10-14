@@ -4,6 +4,7 @@ package server
 
 import (
 	"crypto/md5"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -27,6 +28,7 @@ type Config struct {
 	ViewDistance int32       `json:"view_distance"`
 	Spawn        [3]float64  `json:"spawn"`
 	GameMode     string      `json:"gamemode"`
+	OnlineMode   bool        `json:"online_mode"`
 	World        WorldConfig `json:"world"`
 }
 
@@ -55,7 +57,8 @@ type Server struct {
 	cfg   Config
 	ver   version.Version
 	suite *version.Suite
-	game  *game.Game
+	game    *game.Game
+	privKey *rsa.PrivateKey
 	ln    net.Listener
 }
 
@@ -75,6 +78,14 @@ func New(cfg Config) (*Server, error) {
 	case "spectator", "3":
 		mode = packet.ModeSpectator
 	}
+	var priv *rsa.PrivateKey
+	if cfg.OnlineMode {
+		var err error
+		priv, err = newKeyPair()
+		if err != nil {
+			return nil, err
+		}
+	}
 	g := game.New(game.Config{
 		SpawnX: cfg.Spawn[0], SpawnY: cfg.Spawn[1], SpawnZ: cfg.Spawn[2],
 		ViewDistance: cfg.ViewDistance,
@@ -85,7 +96,7 @@ func New(cfg Config) (*Server, error) {
 		WorldSeed:    cfg.World.Seed,
 		SaveDir:      cfg.World.SaveDir,
 	}, suite)
-	return &Server{cfg: cfg, ver: ver, suite: suite, game: g}, nil
+	return &Server{cfg: cfg, ver: ver, suite: suite, game: g, privKey: priv}, nil
 }
 
 // Game 返回游戏实例（供扩展模块注册事件）。

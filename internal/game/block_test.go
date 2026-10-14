@@ -71,6 +71,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		pickaxes:      map[int32]map[int32]uint8{777: assets.PickaxeBits(777)},
 		items:         map[int32]*itemEntity{},
 		mobs:          map[int32]*mob{},
+		crafting:      map[int32]*craftState{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}

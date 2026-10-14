@@ -109,6 +109,10 @@ type playerUseItemEvent struct {
 	sequence int32
 }
 
+type playerCloseCraftEvent struct {
+	p *entity.Player
+}
+
 type playerAttackEvent struct {
 	p      *entity.Player
 	target int32
@@ -186,6 +190,10 @@ func (s *Session) PlayLoop() {
 		case "minecraft:use_item":
 			ev := &playerUseItemEvent{p: p, hand: pr.VarInt(), sequence: pr.VarInt()}
 			s.game.Submit(ev)
+		case "minecraft:container_close":
+			if pr.VarInt() == 1 {
+				s.game.Submit(&playerCloseCraftEvent{p: p})
+			}
 		case "minecraft:attack":
 			s.game.Submit(&playerAttackEvent{p: p, target: pr.VarInt()})
 		case "minecraft:client_tick_end", "minecraft:player_loaded", "minecraft:punch",

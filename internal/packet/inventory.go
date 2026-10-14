@@ -103,3 +103,14 @@ const (
 	ClickModeQuickCraft int32 = 5 // 拖拽
 	ClickModeDouble     int32 = 6 // 双击收集
 )
+
+// WriteOpenScreen 写入 clientbound open_screen：VarInt 容器类型（menu 注册表）+ 标题文本组件。
+func WriteOpenScreen(w *protocol.Writer, menuType int32, title string) {
+	w.VarInt(menuType)
+	protocol.WriteNBT(w, protocol.Compound{"text": title})
+}
+
+// WriteContainerClose 写入 clientbound container_close：VarInt 窗口。
+func WriteContainerClose(w *protocol.Writer, window int32) {
+	w.VarInt(window)
+}

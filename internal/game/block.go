@@ -89,6 +89,9 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		return
 	}
 	u := ev.use
+	if g.tryOpenCrafting(p, u) {
+		return
+	}
 	dx, dy, dz := packet.FaceOffset(u.Face)
 	tx, ty, tz := u.X+dx, u.Y+dy, u.Z+dz
 	bus := BlockPlace{Player: p, X: tx, Y: ty, Z: tz,

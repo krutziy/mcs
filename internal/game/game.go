@@ -61,6 +61,8 @@ type Game struct {
 	mobs          map[int32]*mob           // 生物实体
 	mobDrops      map[string]int32         // 生物 → 掉落物品（777 基准）
 	recipes      []craftRecipe           // 合成配方（基准版本）
+	itemTags     map[string]map[string]bool // 物品标签（配方匹配用）
+	crafting     map[int32]*craftState     // 打开中的工作台（按玩家 EID）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
 
 	closed atomic.Bool
@@ -77,6 +79,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		players:        map[int32]*entity.Player{},
 		items:          map[int32]*itemEntity{},
 		mobs:           map[int32]*mob{},
+		crafting:       map[int32]*craftState{},
 		dayTime:        6000, // 正午
 		clockID:        1,
 		itemBlocks:     map[int32]map[int32]uint32{},
@@ -114,6 +117,12 @@ func New(cfg Config, suite *version.Suite) *Game {
 		}
 		if md := assets.MobDrops(p); len(md) > 0 {
 			g.mobDrops = md
+		}
+		if rs := loadRecipes(p); len(rs) > 0 {
+			g.recipes = rs
+		}
+		if tg := assets.ItemTags(p); len(tg) > 0 {
+			g.itemTags = tg
 		}
 	}
 	// 775 无官方报告：借用相邻 776 的表
@@ -303,6 +312,10 @@ func (g *Game) handleEvent(e Event) {
 		g.handleUseItem(ev)
 	case *playerAttackEvent:
 		g.handleAttack(ev)
+	case *playerCloseCraftEvent:
+		if ev.p != nil {
+			g.closeCrafting(ev.p)
+		}
 	}
 	g.flushBlockUpdates()
 }
@@ -508,6 +521,7 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 	if _, ok := g.players[p.EntityID]; !ok {
 		return
 	}
+	g.closeCrafting(p)
 	delete(g.players, p.EntityID)
 	g.count.Store(int32(len(g.players)))
 	if g.Cfg.SaveDir != "" {

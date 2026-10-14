@@ -256,3 +256,28 @@ func ItemMap(proto int32) map[int32]int32 {
 func RecipeFile(proto int32) ([]byte, error) {
 	return files.ReadFile(fmt.Sprintf("data/recipes_%d.txt", proto))
 }
+
+// ItemTags 返回物品标签表（标签名 → 成员短名集合）。
+func ItemTags(proto int32) map[string]map[string]bool {
+	b, err := files.ReadFile(fmt.Sprintf("data/itemtags_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[string]map[string]bool{}
+	for _, line := range strings.Split(string(b), "\n") {
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		set := map[string]bool{}
+		for _, name := range strings.Split(parts[1], ",") {
+			if name != "" {
+				set[name] = true
+			}
+		}
+		if len(set) > 0 {
+			m[parts[0]] = set
+		}
+	}
+	return m
+}

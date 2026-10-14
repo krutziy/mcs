@@ -53,7 +53,43 @@ func (g *Game) handleCreativeSlot(ev *playerCreativeSlotEvent) {
 // shift 移动与拖拽暂不实现（同步回合会回滚客户端预测）。
 func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 	p := ev.p
-	if p == nil || ev.click.Window != 0 {
+	if p == nil {
+		return
+	}
+	// 工作台窗口 1：独立路由
+	if ev.click.Window == 1 {
+		cs, ok := g.crafting[p.EntityID]
+		if !ok {
+			return
+		}
+		slot := int32(ev.click.Slot)
+		if ev.click.Mode == packet.ClickModeClick && slot == 0 {
+			g.takeCraftResult3(p, cs)
+		} else if ev.click.Mode == packet.ClickModeClick && slot > 0 {
+			if ref := g.craftSlotRef(p, cs, slot); ref != nil {
+				if ev.click.Button == 0 {
+					leftClickSlotRef(p, ref)
+				} else if ev.click.Button == 1 {
+					rightClickSlotRef(p, ref)
+				}
+			}
+		} else if ev.click.Mode == packet.ClickModeThrow && slot > 0 {
+			if ref := g.craftSlotRef(p, cs, slot); ref != nil && ref.ID != 0 {
+				n := int32(1)
+				if ev.click.Button != 0 {
+					n = ref.Count
+				}
+				g.dropFromHand(p, entity.Item{ID: ref.ID, Count: n}, 1)
+				ref.Count -= n
+				if ref.Count <= 0 {
+					*ref = entity.Item{}
+				}
+			}
+		}
+		g.syncCrafting(p, cs)
+		return
+	}
+	if ev.click.Window != 0 {
 		return
 	}
 	c := ev.click
@@ -103,9 +139,13 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 	g.syncInventory(p)
 }
 
-// leftClickSlot 左键：光标与槽位 拾取/放置/交换/合并。
+// leftClickSlot 左键（窗口 0 槽位）。
 func leftClickSlot(p *entity.Player, slot int32) {
-	s := &p.Slots[slot]
+	leftClickSlotRef(p, &p.Slots[slot])
+}
+
+// leftClickSlotRef 左键：光标与任意槽位引用 拾取/放置/交换/合并。
+func leftClickSlotRef(p *entity.Player, s *entity.Item) {
 	cur := p.Cursor
 	switch {
 	case cur.ID == 0 && s.ID != 0: // 拾取
@@ -125,9 +165,13 @@ func leftClickSlot(p *entity.Player, slot int32) {
 	}
 }
 
-// rightClickSlot 右键：空手取半 / 放一个。
+// rightClickSlot 右键（窗口 0 槽位）。
 func rightClickSlot(p *entity.Player, slot int32) {
-	s := &p.Slots[slot]
+	rightClickSlotRef(p, &p.Slots[slot])
+}
+
+// rightClickSlotRef 右键：空手取半 / 放一个（任意槽位引用）。
+func rightClickSlotRef(p *entity.Player, s *entity.Item) {
 	cur := p.Cursor
 	if cur.ID == 0 && s.ID != 0 {
 		half := (s.Count + 1) / 2

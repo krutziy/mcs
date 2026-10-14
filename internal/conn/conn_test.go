@@ -89,3 +89,28 @@ func TestWriteFrameCompressedSmallProducesZeroMarker(t *testing.T) {
 	c1.Close()
 	c2.Close()
 }
+
+// TestCFB8RoundTrip CFB8 双向往返（同密钥两条独立流互通）。
+func TestCFB8RoundTrip(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	a, _ := newCFB8(key)
+	b, _ := newCFB8(key)
+	msg := []byte("hello minecraft encryption CFB8 1234567890")
+	enc := append([]byte(nil), msg...)
+	a.encrypt(enc)
+	if string(enc) == string(msg) {
+		t.Fatal("加密后不应与原文相同")
+	}
+	b.decrypt(enc)
+	if string(enc) != string(msg) {
+		t.Fatal("解密应还原原文")
+	}
+	// 连续分块流式（反馈状态跨调用保持）
+	msg2 := []byte("SECOND CHUNK AFTER FIRST")
+	enc2 := append([]byte(nil), msg2...)
+	a.encrypt(enc2)
+	b.decrypt(enc2)
+	if string(enc2) != string(msg2) {
+		t.Fatal("流式加解密状态应连续")
+	}
+}
