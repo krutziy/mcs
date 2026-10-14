@@ -37,6 +37,14 @@ type Player struct {
 	SentChunks      map[[2]int32]bool
 	CenterCX, CenterCZ int32
 
+	// 生命值/饥饿（主循环独占；创造模式免疫伤害）
+	Health      float32
+	Food        int32
+	Saturation  float32
+	Exhaustion  float64 // 体力消耗累积（≥4 扣饱和/食物）
+	Dead        bool    // 死亡等待重生
+	FallStart   float64 // 摔落起点 y（0 = 无追踪）
+
 	// 同步状态
 	BroadcastX, BroadcastY, BroadcastZ float64 // 上次广播给他人的位置
 	TeleportID                         int32   // 待确认的传送

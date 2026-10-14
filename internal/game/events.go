@@ -25,6 +25,9 @@ type PlayerQuit struct {
 	Reason string
 }
 
+// PlayerDied 玩家生命值归零（死亡动画已广播）后触发。
+type PlayerDied struct{ Player *entity.Player }
+
 // PlayerMoved 玩家位置更新（已写入 Player 字段）后触发。
 type PlayerMoved struct{ Player *entity.Player }
 

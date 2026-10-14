@@ -56,6 +56,7 @@ type Game struct {
 	mineable      map[int32]map[uint32]uint8
 	pickaxes      map[int32]map[int32]uint8
 	itemToCanon   map[int32]map[int32]int32 // 玩家协议物品 ID → 777 基准 ID（反向翻译表）
+	itemNames     map[int32]map[int32]string // 玩家协议物品 ID → 物品短名（进食判定）
 	items         map[int32]*itemEntity     // 掉落物实体（item.ID 恒为 777 基准）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
 
@@ -80,6 +81,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		mineable:       map[int32]map[uint32]uint8{},
 		pickaxes:       map[int32]map[int32]uint8{},
 		itemToCanon:    map[int32]map[int32]int32{},
+		itemNames:      map[int32]map[int32]string{},
 		pendingBlocks:  map[[3]int32]uint32{},
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
@@ -99,6 +101,13 @@ func New(cfg Config, suite *version.Suite) *Game {
 			}
 			g.itemToCanon[p] = rev
 		}
+		if names := assets.ItemIDs(p); len(names) > 0 {
+			rev := make(map[int32]string, len(names))
+			for name, id := range names {
+				rev[id] = name
+			}
+			g.itemNames[p] = rev
+		}
 	}
 	// 775 无官方报告：借用相邻 776 的表
 	if g.entityTypes[775] == nil {
@@ -107,12 +116,25 @@ func New(cfg Config, suite *version.Suite) *Game {
 	if g.itemToCanon[775] == nil {
 		g.itemToCanon[775] = g.itemToCanon[776]
 	}
+	if g.itemNames[775] == nil {
+		g.itemNames[775] = g.itemNames[776]
+	}
 	// 世界持久化：读档优先于生成器
 	if cfg.SaveDir != "" {
 		if n, err := g.world.Load(cfg.SaveDir); err != nil {
 			log.Printf("[game] 世界读档失败: %v", err)
 		} else if n > 0 {
 			log.Printf("[game] 世界读档 %d 个区块", n)
+		}
+		if tb, err := os.ReadFile(filepath.Join(cfg.SaveDir, "time.json")); err == nil {
+			var tm struct {
+				Age int64 `json:"age"`
+				Day int64 `json:"day"`
+			}
+			if json.Unmarshal(tb, &tm) == nil {
+				g.worldAge, g.dayTime = tm.Age, tm.Day
+				log.Printf("[game] 恢复世界时间 age=%d day=%d", g.worldAge, g.dayTime)
+			}
 		}
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
@@ -181,6 +203,7 @@ func (g *Game) tickNow() {
 	g.dayTime = (g.dayTime + 1) % 24000
 
 	g.tickItems()
+	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒
 		g.broadcastTime()
@@ -193,13 +216,16 @@ func (g *Game) tickNow() {
 	g.Bus.emit(Tick{Count: g.tick})
 }
 
-// saveAll 保存世界脏区块与玩家状态。
+// saveAll 保存世界脏区块、时间与玩家状态。
 func (g *Game) saveAll() {
 	if n, err := g.world.Save(g.Cfg.SaveDir); err != nil {
 		log.Printf("[game] 世界存档失败: %v", err)
 	} else if n > 0 {
 		log.Printf("[game] 世界存档 %d 个区块", n)
 	}
+	// 时间存档（世界年龄 + 一天内时间）
+	mb, _ := json.Marshal(map[string]int64{"age": g.worldAge, "day": g.dayTime})
+	_ = os.WriteFile(filepath.Join(g.Cfg.SaveDir, "time.json"), mb, 0o644)
 	for _, p := range g.players {
 		g.savePlayer(p)
 	}
@@ -219,8 +245,17 @@ func (g *Game) handleEvent(e Event) {
 		g.handleQuit(ev)
 	case *playerMoveEvent:
 		p := ev.p
+		prevX, prevZ := p.BroadcastX, p.BroadcastZ
+		prevOnGround := p.OnGround
 		p.X, p.Y, p.Z = ev.x, ev.y, ev.z
 		p.Yaw, p.Pitch, p.OnGround = ev.yaw, ev.pitch, ev.onGround
+		if !p.Dead {
+			dx, dz := p.X-prevX, p.Z-prevZ
+			g.exhaustMovement(p, dx, dz, p.Sprinting)
+			if !prevOnGround || !p.OnGround { // 起跳/落地时推进摔落追踪
+				g.trackFall(p, p.Y, p.OnGround)
+			}
+		}
 		g.syncMovement(p)
 		g.syncChunks(p)
 		g.Bus.emit(PlayerMoved{Player: p})
@@ -251,6 +286,12 @@ func (g *Game) handleEvent(e Event) {
 		g.handleCreativeSlot(ev)
 	case *playerContainerClickEvent:
 		g.handleContainerClick(ev)
+	case *playerRespawnEvent:
+		if ev.p != nil {
+			g.handleRespawn(ev.p)
+		}
+	case *playerUseItemEvent:
+		g.handleUseItem(ev)
 	}
 	g.flushBlockUpdates()
 }
@@ -332,7 +373,9 @@ func (g *Game) handleJoin(s *Session) {
 		PreviousGameMode:    255,
 		IsFlat:              true,
 		SeaLevel:            -63,
+		TailApplies:         s.ver.LoginTrailingByte, // 26.3 起末尾多一个布尔
 	}
+	p.Health, p.Food, p.Saturation = 20, 20, 5
 	s.SendPlay("minecraft:login", func(w *protocol.Writer) {
 		packet.WriteJoinGame(w, join)
 	})
@@ -378,6 +421,7 @@ func (g *Game) handleJoin(s *Session) {
 
 	g.sendChunks(s, p, int32(g.Cfg.SpawnX)>>4, int32(g.Cfg.SpawnZ)>>4)
 	g.syncInventory(p) // 初始物品栏同步
+	g.syncHealth(p)    // 初始生命/食物同步
 
 	// 视距内已有的掉落物补给新玩家
 	for _, ie := range g.items {

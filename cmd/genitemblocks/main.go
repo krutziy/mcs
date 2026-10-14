@@ -102,18 +102,29 @@ func main() {
 	fmt.Printf("%s: %d 项物品→方块映射\n", *out, len(pairs))
 
 	// 顺带输出实体类型表（entitytype_<proto>.txt：名称 → 网络 ID）
-	var entLines []string
+	var entLines, itemIDLines []string
 	for name, e := range reg["minecraft:entity_type"].Entries {
 		short := strings.TrimPrefix(name, "minecraft:")
 		entLines = append(entLines, fmt.Sprintf("%s %d", short, e.ProtocolID))
 	}
+	for name, e := range reg["minecraft:item"].Entries {
+		short := strings.TrimPrefix(name, "minecraft:")
+		itemIDLines = append(itemIDLines, fmt.Sprintf("%s %d", short, e.ProtocolID))
+	}
 	sort.Strings(entLines)
+	sort.Strings(itemIDLines)
 	entPath := filepath.Join(filepath.Dir(*out), fmt.Sprintf("entitytype_%d.txt", *proto))
 	if err := os.WriteFile(entPath, []byte(strings.Join(entLines, "\n")+"\n"), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "写出失败:", err)
 		os.Exit(1)
 	}
 	fmt.Printf("%s: %d 项实体类型\n", entPath, len(entLines))
+	itemPath := filepath.Join(filepath.Dir(*out), fmt.Sprintf("itemid_%d.txt", *proto))
+	if err := os.WriteFile(itemPath, []byte(strings.Join(itemIDLines, "\n")+"\n"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "写出失败:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s: %d 项物品名→ID\n", itemPath, len(itemIDLines))
 
 	// --- 跨版本 ID 翻译表（当 -reports 是非基准版本时）---
 	if *reports != *canonical {

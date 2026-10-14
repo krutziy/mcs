@@ -94,6 +94,11 @@ func EntityTypes(proto int32) map[string]int32 {
 	return loadTextTable(proto, "entitytype")
 }
 
+// ItemIDs 返回协议版本的物品表（短名 → 网络 ID）。
+func ItemIDs(proto int32) map[string]int32 {
+	return loadTextTable(proto, "itemid")
+}
+
 // BlockDrops 返回方块默认状态 → 掉落物品网络 ID（cmd/gendrops 生成，仅基准版本）。
 func BlockDrops(proto int32) map[uint32]int32 {
 	b, err := files.ReadFile(fmt.Sprintf("data/blockdrops_%d.txt", proto))

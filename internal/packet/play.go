@@ -83,9 +83,14 @@ type JoinGame struct {
 	PortalCooldown   int32
 	SeaLevel         int32
 	EnforcesSecure   bool
+	// ExtraTail: 26.3(777) 起 login 末尾多出的布尔（官方 false；旧版本置 false 不写出）
+	ExtraTail bool
+	// TailApplies: 控制 ExtraTail 是否写出（按玩家协议版本设置）
+	TailApplies bool
 }
 
-// WriteJoinGame 写入 login 包。字段顺序经官方 26.1 抓包逐字节验证。
+// WriteJoinGame 写入 login 包。字段顺序经官方 26.1 抓包逐字节验证；
+// 26.3(777) 起末尾多一个布尔字节（ExtraTail，官方发 false）。
 func WriteJoinGame(w *protocol.Writer, p JoinGame) {
 	w.Int32(p.EntityID)
 	w.Bool(p.Hardcore)
@@ -108,8 +113,14 @@ func WriteJoinGame(w *protocol.Writer, p JoinGame) {
 	w.Bool(p.IsDebug)
 	w.Bool(p.IsFlat)
 	w.VarInt(p.PortalCooldown)
+	if p.TailApplies { // 26.3：portal 与 seaLevel 之间多一个 VarInt 0（官方抓包）
+		w.VarInt(0)
+	}
 	w.VarInt(p.SeaLevel)
 	w.Bool(p.EnforcesSecure)
+	if p.TailApplies { // 26.3：末尾多一个布尔（官方 false）
+		w.Bool(p.ExtraTail)
+	}
 }
 
 // PlayerPositionOut 是 player_position 包（服务器发起的玩家传送）。

@@ -17,6 +17,8 @@ type Version struct {
 	ConfirmEchoesPos bool
 	// ClassicTime: 1.21.x 的经典 set_time（age+timeOfDay+尾字节）而非 26.x 时钟列表
 	ClassicTime bool
+	// LoginTrailingByte: 26.3(777) 起 login 包末尾多一个布尔字节（经官方抓包比对）
+	LoginTrailingByte bool
 }
 
 // 支持的版本列表（新增版本时在此登记并添加对应的包 ID 表）。
@@ -24,7 +26,7 @@ var supported = []Version{
 	{Protocol: 774, Name: "1.21.11", ClassicTime: true},
 	{Protocol: 775, Name: "26.1"},
 	{Protocol: 776, Name: "26.2"},
-	{Protocol: 777, Name: "26.3", ConfirmEchoesPos: true},
+	{Protocol: 777, Name: "26.3", ConfirmEchoesPos: true, LoginTrailingByte: true},
 }
 
 // Lookup 按协议号查找受支持的版本。

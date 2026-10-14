@@ -70,6 +70,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		mineable:      map[int32]map[uint32]uint8{777: assets.MineableMask(777)},
 		pickaxes:      map[int32]map[int32]uint8{777: assets.PickaxeBits(777)},
 		items:         map[int32]*itemEntity{},
+		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}
 	fs := &fakeSender{}
@@ -79,6 +80,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		Send:       fs,
 		SentChunks: map[[2]int32]bool{{0, 0}: true},
 	}
+	p.Health, p.Food, p.Saturation = 20, 20, 5
 	g.players[1] = p
 	return g, p, fs
 }

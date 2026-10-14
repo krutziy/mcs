@@ -22,7 +22,7 @@ const levelEventBlockBreak int32 = 2001
 // （客户端本地播放破坏进度动画，服务端先不做按方块类型的时长校验）。
 func (g *Game) handleDig(ev *blockDigEvent) {
 	p := ev.p
-	if p == nil {
+	if p == nil || p.Dead {
 		return
 	}
 	a := ev.act
@@ -85,7 +85,7 @@ func (g *Game) digDrops(p *entity.Player, state uint32) []entity.Item {
 // 目标位置为被点击方块的面外侧，可替换目标（空气/水）时放置。
 func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	p := ev.p
-	if p == nil {
+	if p == nil || p.Dead {
 		return
 	}
 	u := ev.use

@@ -99,6 +99,16 @@ type playerContainerClickEvent struct {
 	click packet.ContainerClick
 }
 
+type playerRespawnEvent struct {
+	p *entity.Player
+}
+
+type playerUseItemEvent struct {
+	p        *entity.Player
+	hand     int32
+	sequence int32
+}
+
 // PlayLoop 阻塞处理 play 状态的入站包，直到连接断开。在独立 goroutine 中运行。
 func (s *Session) PlayLoop() {
 	s.game.JoinSession(s)
@@ -164,6 +174,13 @@ func (s *Session) PlayLoop() {
 			s.game.Submit(&playerCreativeSlotEvent{p: p, cs: packet.ReadCreativeSlot(pr)})
 		case "minecraft:container_click":
 			s.game.Submit(&playerContainerClickEvent{p: p, click: packet.ReadContainerClick(pr)})
+		case "minecraft:client_command":
+			if action := pr.VarInt(); action == 0 { // perform respawn
+				s.game.Submit(&playerRespawnEvent{p: p})
+			}
+		case "minecraft:use_item":
+			ev := &playerUseItemEvent{p: p, hand: pr.VarInt(), sequence: pr.VarInt()}
+			s.game.Submit(ev)
 		case "minecraft:client_tick_end", "minecraft:player_loaded", "minecraft:punch",
 			"minecraft:move_vehicle", "minecraft:player_input":
 			// 活体心跳/输入流：无需处理
