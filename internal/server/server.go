@@ -268,7 +268,7 @@ func (s *Server) handleLogin(c *conn.Conn, ver version.Version, suite *version.S
 	c.SetCompression(256)
 
 	c.WritePacket(suite.MustID("login", "clientbound", "minecraft:login_finished"), func(w *protocol.Writer) {
-		packet.WriteLoginFinished(w, uuid, start.Username)
+		packet.WriteLoginFinishedFor(w, uuid, start.Username, int32(ver.Protocol))
 	})
 
 	// 等待 login_acknowledged
