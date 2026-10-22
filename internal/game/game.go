@@ -68,6 +68,14 @@ type Game struct {
 	furnaces     map[[3]int32]*furnaceState // 熔炉状态（按方块位置）
 	openFurnace  map[int32][3]int32        // 打开中的熔炉（玩家 EID → 位置）
 	smelting     map[string]string         // 冶炼表（777 基准）
+	bedByState   map[uint32]*bedInfo       // 床状态反查
+	doorByState  map[uint32]*doorInfo      // 门状态反查
+	doorOpenFlip map[[2]uint32]uint32      // 门状态开/关互换
+	chests       map[[3]int32]*chestState  // 箱子（位置 → 27 格）
+	openChest    map[int32][3]int32        // 打开中的箱子
+	fallings     map[int32]*fallingBlock   // 下落方块实体
+	waterQueue   [][3]int32                // 待流水位置
+	saplings     map[[3]int32]int32        // 树苗（位置 → 树龄）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
 
@@ -164,6 +172,8 @@ func New(cfg Config, suite *version.Suite) *Game {
 			}
 		}
 		g.loadFurnaces()
+	g.loadChests()
+	g.loadInteractTables()
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
 	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
@@ -234,6 +244,9 @@ func (g *Game) tickNow() {
 	g.tickMobs()
 	g.tickMobSpawning()
 	g.tickFurnaces()
+	g.tickFallings()
+	g.tickWater()
+	g.tickSaplings()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒
@@ -258,6 +271,7 @@ func (g *Game) saveAll() {
 	mb, _ := json.Marshal(map[string]int64{"age": g.worldAge, "day": g.dayTime})
 	_ = os.WriteFile(filepath.Join(g.Cfg.SaveDir, "time.json"), mb, 0o644)
 	g.saveFurnaces()
+	g.saveChests()
 	for _, p := range g.players {
 		g.savePlayer(p)
 	}
@@ -334,6 +348,10 @@ func (g *Game) handleEvent(e Event) {
 		if ev.p != nil {
 			g.closeFurnace(ev.p)
 		}
+	case *playerCloseChestEvent:
+		if ev.p != nil {
+			g.closeChest(ev.p)
+		}
 	}
 	g.flushBlockUpdates()
 }
@@ -347,6 +365,7 @@ type playerStateFile struct {
 	Pitch    float32      `json:"pitch"`
 	Slots    []entity.Item `json:"slots"`
 	HeldSlot int32        `json:"held"`
+	Spawn    *[3]float64  `json:"spawn"`
 }
 
 // savePlayer 保存玩家状态到存档目录。
@@ -356,6 +375,10 @@ func (g *Game) savePlayer(p *entity.Player) {
 		return
 	}
 	st := playerStateFile{X: p.X, Y: p.Y, Z: p.Z, Yaw: p.Yaw, Pitch: p.Pitch, Slots: p.Slots[:], HeldSlot: p.HeldSlot}
+	if p.SpawnPos != [3]float64{} {
+		sp := p.SpawnPos
+		st.Spawn = &sp
+	}
 	b, err := json.Marshal(st)
 	if err != nil {
 		return
@@ -377,6 +400,9 @@ func (g *Game) loadPlayer(p *entity.Player) {
 		copy(p.Slots[:], st.Slots)
 	}
 	p.HeldSlot = st.HeldSlot
+	if st.Spawn != nil {
+		p.SpawnPos = *st.Spawn
+	}
 	p.X, p.Y, p.Z = st.X, st.Y, st.Z
 	p.Yaw, p.Pitch = st.Yaw, st.Pitch
 }
@@ -543,6 +569,9 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 	g.closeCrafting(p)
 	if _, ok := g.openFurnace[p.EntityID]; ok {
 		g.closeFurnace(p)
+	}
+	if _, ok := g.openChest[p.EntityID]; ok {
+		g.closeChest(p)
 	}
 	delete(g.players, p.EntityID)
 	g.count.Store(int32(len(g.players)))

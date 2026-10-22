@@ -37,6 +37,10 @@ type Player struct {
 	SentChunks      map[[2]int32]bool
 	CenterCX, CenterCZ int32
 
+	// SpawnPos 个人重生点（睡床设置；零值 = 世界出生点）
+	SpawnPos [3]float64
+	Sleeping bool
+
 	// GameMode 该玩家的游戏模式（1=创造 0=生存；默认继承服务器配置）
 	GameMode int32
 

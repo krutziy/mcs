@@ -74,6 +74,10 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		crafting:      map[int32]*craftState{},
 		furnaces:      map[[3]int32]*furnaceState{},
 		openFurnace:   map[int32][3]int32{},
+		chests:        map[[3]int32]*chestState{},
+		openChest:     map[int32][3]int32{},
+		fallings:      map[int32]*fallingBlock{},
+		saplings:      map[[3]int32]int32{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}

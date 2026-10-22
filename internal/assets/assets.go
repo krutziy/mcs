@@ -297,3 +297,8 @@ func Smelting(proto int32) map[string]string {
 	}
 	return m
 }
+
+// InteractFile 返回交互方块状态表原始内容（bedstates/doorstates）。
+func InteractFile(name string) ([]byte, error) {
+	return files.ReadFile(fmt.Sprintf("data/%s_777.txt", name))
+}

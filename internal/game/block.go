@@ -53,8 +53,13 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 		})
 	}
 	g.dropFurnaceContents([3]int32{a.X, a.Y, a.Z})
+	g.dropChestContents([3]int32{a.X, a.Y, a.Z})
+	g.breakBedIfHit(a.X, a.Y, a.Z, old)
+	g.breakDoorIfHit(a.X, a.Y, a.Z, old)
 	g.applyBlock(a.X, a.Y, a.Z, world.StateAir, a.Sequence, p)
 	bus.Broke = true
+	g.triggerGravity(a.X, a.Y+1, a.Z) // 上方重力方块塌落
+	g.scheduleWaterFlow(a.X, a.Y, a.Z) // 邻水流入
 	// 生存模式：按掉落表生成掉落物（需镐方块还要材质门槛）
 	if !g.isCreative(p) {
 		bus.Drops = g.digDrops(p, old)
@@ -90,7 +95,8 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		return
 	}
 	u := ev.use
-	if g.tryOpenCrafting(p, u) || g.tryOpenFurnace(p, u) {
+	if g.tryOpenCrafting(p, u) || g.tryOpenFurnace(p, u) || g.tryOpenChest(p, u) ||
+		g.trySleepBed(p, u) || g.toggleDoor(p, u) {
 		return
 	}
 	dx, dy, dz := packet.FaceOffset(u.Face)
@@ -111,6 +117,18 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		g.rejectPlace(p, u, tx, ty, tz)
 		return // 该物品不是方块（或该版本无映射表）
 	}
+	if g.bedByState[state] != nil { // 床：双格放置
+		if g.inDigRange(p, tx, ty, tz) {
+			g.tryPlaceBed(p, u, tx, ty, tz, state)
+		}
+		return
+	}
+	if g.doorByState[state] != nil { // 门：双格放置
+		if g.inDigRange(p, tx, ty, tz) {
+			g.tryPlaceDoor(p, u, tx, ty, tz, state)
+		}
+		return
+	}
 	if !g.inDigRange(p, tx, ty, tz) {
 		return
 	}
@@ -121,6 +139,11 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	}
 	g.applyBlock(tx, ty, tz, state, u.Sequence, p)
 	bus.State, bus.ItemID = state, held.ID
+	if state == world.StateSand || state == world.StateGravel {
+		g.triggerGravity(tx, ty, tz) // 放在悬空处 → 落下
+	} else {
+		g.trackSapling(tx, ty, tz, state)
+	}
 	// 生存模式：放置消耗一个手持物品
 	if !g.isCreative(p) {
 		s := &p.Slots[36+p.HeldSlot]

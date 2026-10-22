@@ -94,7 +94,11 @@ func (g *Game) handleRespawn(p *entity.Player) {
 			DataKept: false, TailApplies: showTail,
 		})
 	})
-	p.X, p.Y, p.Z = g.Cfg.SpawnX, g.Cfg.SpawnY, g.Cfg.SpawnZ
+	spX, spY, spZ := g.Cfg.SpawnX, g.Cfg.SpawnY, g.Cfg.SpawnZ
+	if p.SpawnPos != [3]float64{} {
+		spX, spY, spZ = p.SpawnPos[0], p.SpawnPos[1], p.SpawnPos[2]
+	}
+	p.X, p.Y, p.Z = spX, spY, spZ
 	p.TeleportID++
 	id := p.TeleportID
 	x, y, z := p.X, p.Y, p.Z
