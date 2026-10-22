@@ -8,6 +8,8 @@ package game
 // 结束本地的"幽灵方块"预测）。
 
 import (
+	"math/rand"
+
 	"mcserver/internal/assets"
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
@@ -58,6 +60,10 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	g.breakDoorIfHit(a.X, a.Y, a.Z, old)
 	g.applyBlock(a.X, a.Y, a.Z, world.StateAir, a.Sequence, p)
 	bus.Broke = true
+	g.damageHeld(p)
+	if xp, ok := oreXP[g.blockNames[old]]; ok && xp > 0 {
+		g.spawnXPOrb(float64(a.X)+0.5, float64(a.Y)+0.5, float64(a.Z)+0.5, 1+rand.Int31n(xp))
+	}
 	g.triggerGravity(a.X, a.Y+1, a.Z) // 上方重力方块塌落
 	g.scheduleWaterFlow(a.X, a.Y, a.Z) // 邻水流入
 	// 生存模式：按掉落表生成掉落物（需镐方块还要材质门槛）

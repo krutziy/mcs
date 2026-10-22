@@ -201,6 +201,7 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 		}
 	}
 	g.syncInventory(p)
+	g.broadcastEquipment(p)
 }
 
 // leftClickSlot 左键（窗口 0 槽位）。

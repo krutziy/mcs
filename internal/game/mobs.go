@@ -201,6 +201,7 @@ func (g *Game) handleAttack(ev *playerAttackEvent) {
 			dx, dz, d = 1, 0, 1
 		}
 		m.health -= dmg
+		g.damageHeld(p)
 		m.vx += dx / d * 0.4
 		m.vz += dz / d * 0.4
 		m.vy = 0.3
@@ -240,6 +241,9 @@ func (g *Game) killMob(m *mob, by *entity.Player) {
 	delete(g.mobs, eid)
 	if itemID, ok := g.mobDrops[m.kind.name]; ok {
 		g.spawnItem(m.x, m.y+0.5, m.z, entity.Item{ID: itemID, Count: 1})
+	}
+	if xp := mobXP[m.kind.name]; xp > 0 {
+		g.spawnXPOrb(m.x, m.y+0.5, m.z, xp)
 	}
 	g.Bus.emit(MobKilled{Player: by, Kind: m.kind.name})
 }

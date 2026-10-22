@@ -10,8 +10,9 @@ const InvSlots = 46
 
 // ItemSlot 是物品槽（ID 0 = 空）。
 type ItemSlot struct {
-	ID    int32
-	Count int32
+	ID     int32
+	Count  int32
+	Damage int32 // 已损失耐久（>0 时输出 damage 组件，组件 ID 3）
 }
 
 // WriteEmptySlot 写入空 Slot 字段。
@@ -21,10 +22,21 @@ func WriteEmptySlot(w *protocol.Writer) {
 
 // WriteSlot 写入一个无自定义组件的物品 Slot 字段。
 func WriteSlot(w *protocol.Writer, itemID, count int32) {
+	WriteSlotDamage(w, itemID, count, 0)
+}
+
+// WriteSlotDamage 写入带耐久（damage 组件，ID 3）的物品 Slot 字段。
+func WriteSlotDamage(w *protocol.Writer, itemID, count, damage int32) {
 	w.Bool(true)
 	w.VarInt(itemID)
 	w.VarInt(count)
-	w.VarInt(0) // 增补组件数
+	if damage > 0 {
+		w.VarInt(1)      // 增补组件数
+		w.VarInt(3)      // minecraft:damage
+		w.VarInt(damage) // 已损失耐久
+	} else {
+		w.VarInt(0)
+	}
 	w.VarInt(0) // 移除组件数
 }
 
@@ -38,7 +50,7 @@ func WriteContainerSetContent(w *protocol.Writer, window, state int32, slots []I
 		if s.ID == 0 {
 			WriteEmptySlot(w)
 		} else {
-			WriteSlot(w, s.ID, s.Count)
+			WriteSlotDamage(w, s.ID, s.Count, s.Damage)
 		}
 	}
 	if carried.ID == 0 {

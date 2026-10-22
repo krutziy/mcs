@@ -222,3 +222,97 @@ func TestSaplingGrowth(t *testing.T) {
 		t.Fatal("树冠应生成")
 	}
 }
+
+// TestXPAndOrb 经验：给经验升级 + 经验球拾取。
+func TestXPAndOrb(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	g.world.SetBlock(8, -61, 8, world.StateStone)
+	g.giveXP(p, 10) // 7+0*2=7 升 1 级余 3；9 升 2 级余 0
+	if p.Level < 1 || p.TotalXP != 10 {
+		t.Fatalf("经验不符: level=%d total=%d", p.Level, p.TotalXP)
+	}
+	if fs.find("minecraft:set_experience") == nil {
+		t.Fatal("应同步 set_experience")
+	}
+	// 经验球拾取
+	g.spawnXPOrb(8.5, -60.5, 8.5, 5)
+	for i := 0; i < itemPickupWait+5; i++ {
+		g.tickOrbs()
+	}
+	if p.TotalXP != 15 {
+		t.Fatalf("拾取经验球后应为 15: %d", p.TotalXP)
+	}
+	if len(g.orbs) != 0 {
+		t.Fatal("经验球应消失")
+	}
+}
+
+// TestDurability 工具耐久：铁剑 250，攻击 249 次后仍在，第 250 次破坏。
+func TestDurability(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	ironSword := ids["iron_sword"]
+	p.Slots[36] = entity.Item{ID: ironSword, Count: 1}
+	p.Slots[36].Damage = 248
+	m := g.spawnMob("chicken", 8.5, -60, 8.5)
+	g.mobs[m.eid].health = 999
+
+	for i := 0; i < 1; i++ { // 249
+		g.handleAttack(&playerAttackEvent{p: p, target: m.eid})
+	}
+	if p.Slots[36].ID != ironSword {
+		t.Fatalf("249 损伤不应破坏: %+v", p.Slots[36])
+	}
+	g.handleAttack(&playerAttackEvent{p: p, target: m.eid})
+	if p.Slots[36].ID != 0 {
+		t.Fatalf("250 损伤应破坏: %+v", p.Slots[36])
+	}
+}
+
+// TestArmorAbsorb 盔甲减伤：全套铁甲 15 点 → 伤害 10 减 60%。
+func TestArmorAbsorb(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	p.Slots[5] = entity.Item{ID: ids["iron_helmet"], Count: 1}    // 2
+	p.Slots[6] = entity.Item{ID: ids["iron_chestplate"], Count: 1} // 6
+	p.Slots[7] = entity.Item{ID: ids["iron_leggings"], Count: 1}  // 5
+	p.Slots[8] = entity.Item{ID: ids["iron_boots"], Count: 1}     // 2
+	if pts := g.totalArmor(p); pts != 15 {
+		t.Fatalf("铁甲总点数应 15: %d", pts)
+	}
+	g.damage(p, 10, damageGeneric)
+	// 10 * (1 - 15*0.04) = 4 → 20-4=16
+	if p.Health != 16 {
+		t.Fatalf("减伤后应为 16: %.1f", p.Health)
+	}
+}
+
+// TestDeathDrops 死亡掉落：物品栏清空 + 经验折半掉球。
+func TestDeathDrops(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	p.Slots[36] = entity.Item{ID: ids["stone"], Count: 32}
+	p.TotalXP = 20
+	g.damage(p, 1000, damageGeneric)
+	if !p.Dead {
+		t.Fatal("应死亡")
+	}
+	if p.Slots[36].ID != 0 {
+		t.Fatal("死亡后物品栏应清空")
+	}
+	if p.TotalXP != 0 {
+		t.Fatal("死亡后经验应清零")
+	}
+	items := 0
+	for _, ie := range g.items {
+		if ie.item.ID == ids["stone"] {
+			items++
+		}
+	}
+	if items != 1 {
+		t.Fatalf("石头应掉落: %d", items)
+	}
+	if len(g.orbs) == 0 {
+		t.Fatal("经验应折半掉球")
+	}
+}

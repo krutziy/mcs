@@ -32,6 +32,7 @@ const smeltTicks = 200 // 原版冶炼 10 秒
 type furnaceState struct {
 	input, fuel, output entity.Item
 	burn, burnMax, cook int32
+	xpBank              int32 // 待领取的熔炼经验
 }
 
 // 燃料热值（刻）；木板/原木类按物品标签（planks/logs）判定 300。
@@ -162,6 +163,7 @@ func (g *Game) tickFurnaces() {
 					if fs.input.Count <= 0 {
 						fs.input = entity.Item{}
 					}
+					fs.xpBank += smeltXP[g.itemNameOf777(outID)]
 				}
 			} else if fs.cook > 0 {
 				fs.cook -= 2

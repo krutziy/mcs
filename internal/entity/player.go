@@ -6,8 +6,9 @@ import (
 
 // Item 是玩家物品槽的最小描述（放置判定只需物品 ID 与数量）。
 type Item struct {
-	ID    int32 // 物品网络 ID（该玩家协议版本）
-	Count int32
+	ID     int32 // 物品网络 ID（该玩家协议版本）
+	Count  int32
+	Damage int32 // 已损失耐久（0=全新；wire 上的 damage 组件）
 }
 
 // Held 返回当前手持物品（快捷栏选中槽）。
@@ -36,6 +37,11 @@ type Player struct {
 	// 区块视野跟踪（主循环维护：已发送区块集合与当前缓存中心）
 	SentChunks      map[[2]int32]bool
 	CenterCX, CenterCZ int32
+
+	// 经验（主循环独占）
+	TotalXP   int32
+	Level     int32
+	XPPending int32
 
 	// SpawnPos 个人重生点（睡床设置；零值 = 世界出生点）
 	SpawnPos [3]float64

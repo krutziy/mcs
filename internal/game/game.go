@@ -76,6 +76,8 @@ type Game struct {
 	fallings     map[int32]*fallingBlock   // 下落方块实体
 	waterQueue   [][3]int32                // 待流水位置
 	saplings     map[[3]int32]int32        // 树苗（位置 → 树龄）
+	orbs         map[int32]*xpOrb          // 经验球实体
+	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
 
@@ -142,6 +144,9 @@ func New(cfg Config, suite *version.Suite) *Game {
 		}
 		if sm := assets.Smelting(p); len(sm) > 0 {
 			g.smelting = sm
+		}
+		if bn := assets.BlockNames(p); len(bn) > 0 {
+			g.blockNames = bn
 		}
 	}
 	// 775 无官方报告：借用相邻 776 的表
@@ -247,6 +252,7 @@ func (g *Game) tickNow() {
 	g.tickFallings()
 	g.tickWater()
 	g.tickSaplings()
+	g.tickOrbs()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒
@@ -491,6 +497,7 @@ func (g *Game) handleJoin(s *Session) {
 	g.sendChunks(s, p, int32(g.Cfg.SpawnX)>>4, int32(g.Cfg.SpawnZ)>>4)
 	g.syncInventory(p) // 初始物品栏同步
 	g.syncHealth(p)    // 初始生命/食物同步
+	g.syncExperience(p)
 
 	// 视距内已有的生物补给新玩家
 	for _, m := range g.mobs {
@@ -530,6 +537,7 @@ func (g *Game) handleJoin(s *Session) {
 		})
 	}
 
+	g.broadcastEquipment(p)
 	g.Bus.emit(PlayerJoin{Player: p})
 	log.Printf("[game] %s 加入，在线 %d 人", p.Name, len(g.players))
 	g.broadcastSystem(fmt.Sprintf("§e%s 加入了游戏", p.Name))

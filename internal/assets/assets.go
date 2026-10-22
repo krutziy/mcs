@@ -302,3 +302,21 @@ func Smelting(proto int32) map[string]string {
 func InteractFile(name string) ([]byte, error) {
 	return files.ReadFile(fmt.Sprintf("data/%s_777.txt", name))
 }
+
+// BlockNames 返回方块状态 → 方块短名（777 基准）。
+func BlockNames(proto int32) map[uint32]string {
+	b, err := files.ReadFile(fmt.Sprintf("data/blocknames_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[uint32]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) == 2 {
+			if v, err := strconv.ParseUint(parts[0], 10, 32); err == nil {
+				m[uint32(v)] = parts[1]
+			}
+		}
+	}
+	return m
+}

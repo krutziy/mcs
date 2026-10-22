@@ -78,6 +78,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		openChest:     map[int32][3]int32{},
 		fallings:      map[int32]*fallingBlock{},
 		saplings:      map[[3]int32]int32{},
+		orbs:          map[int32]*xpOrb{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}

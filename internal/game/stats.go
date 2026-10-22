@@ -32,6 +32,7 @@ func (g *Game) damage(p *entity.Player, amount float32, sourceType int32) {
 	if p.Dead || g.isCreative(p) || amount <= 0 {
 		return
 	}
+	amount = g.armorAbsorb(p, amount)
 	if p.Health > amount {
 		p.Health -= amount
 	} else {
@@ -66,6 +67,7 @@ func (g *Game) sendDamageVisual(p *entity.Player, sourceType int32) {
 // killPlayer 死亡：广播死亡动画（entity_event 3），标记待重生。
 func (g *Game) killPlayer(p *entity.Player) {
 	p.Dead = true
+	g.dropInventoryOnDeath(p)
 	eid := p.EntityID
 	for _, other := range g.players {
 		other.Send.SendPlay("minecraft:entity_event", func(w *protocol.Writer) {
