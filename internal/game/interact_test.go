@@ -546,3 +546,40 @@ func TestFarmTillAndPlant(t *testing.T) {
 		t.Fatalf("收获应掉 1 麦 + ≥1 种子: %d %d", wheatN, seedN)
 	}
 }
+
+// TestBonemeal 骨粉：小麦跳龄、树苗立即成树。
+func TestBonemeal(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	g.world.SetBlock(8, -62, 8, world.StateStone)
+	g.world.SetBlock(8, -61, 8, farmlandState)
+	g.world.SetBlock(8, -60, 8, wheatAges[1])
+	g.crops[[3]int32{8, -60, 8}] = 0
+
+	p.Slots[36] = entity.Item{ID: ids["bone_meal"], Count: 2}
+	if !g.tryBonemeal(p, packet.UseItemOn{X: 8, Y: -60, Z: 8, Face: 1, Sequence: 1}) {
+		t.Fatal("骨粉右键小麦应生效")
+	}
+	s := g.world.GetBlock(8, -60, 8)
+	age := -1
+	for i, wa := range wheatAges {
+		if s == wa {
+			age = i
+		}
+	}
+	if age < 3 {
+		t.Fatalf("应 +2~3 龄: %d", age)
+	}
+	if p.Slots[36].Count != 1 {
+		t.Fatal("应消耗 1 骨粉")
+	}
+
+	// 树苗立即成树
+	g.world.SetBlock(20, -60, 20, saplingState)
+	if !g.tryBonemeal(p, packet.UseItemOn{X: 20, Y: -60, Z: 20, Face: 1, Sequence: 2}) {
+		t.Fatal("骨粉右键树苗应成树")
+	}
+	if g.world.GetBlock(20, -60, 20) != logState {
+		t.Fatal("树苗应长成原木")
+	}
+}

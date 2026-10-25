@@ -131,3 +131,48 @@ func (g *Game) harvestWheatIfMature(x, y, z int32, old uint32) {
 
 // tillTargets 草方块两状态（777：8=snowy true, 9=false）都算。
 var grassStates = map[uint32]bool{8: true, 9: true}
+
+// tryBonemeal 骨粉右键：小麦 +2-3 龄 / 树苗立即成树。返回 true 拦截。
+func (g *Game) tryBonemeal(p *entity.Player, u packet.UseItemOn) bool {
+	held := p.Held()
+	if held.ID == 0 {
+		return false
+	}
+	if g.itemNameOf(p, held.ID) != "bone_meal" {
+		return false
+	}
+	s := g.world.GetBlock(u.X, u.Y, u.Z)
+	// 树苗 → 立即成树
+	if s == saplingState {
+		g.world.SetBlock(u.X, u.Y, u.Z, world.StateAir)
+		g.growOak(u.X, u.Y, u.Z)
+		g.consumeBonemeal(p)
+		return true
+	}
+	// 小麦 +2~3 龄
+	for i, wa := range wheatAges {
+		if s == wa && i < 7 {
+			add := 2 + rand.Intn(2)
+			ni := i + add
+			if ni > 7 {
+				ni = 7
+			}
+			g.applyBlock(u.X, u.Y, u.Z, wheatAges[ni], u.Sequence, p)
+			g.consumeBonemeal(p)
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Game) consumeBonemeal(p *entity.Player) {
+	if g.isCreative(p) {
+		return
+	}
+	s := &p.Slots[36+p.HeldSlot]
+	s.Count--
+	if s.Count <= 0 {
+		*s = entity.Item{}
+	}
+	g.syncInventory(p)
+}

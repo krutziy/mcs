@@ -90,6 +90,7 @@ func (g *NoiseGenerator) Generate(ch *world.Chunk) {
 	}
 	g.plantOres(ch)
 	g.plantTrees(ch)
+	g.decorate(ch)
 }
 
 // HeightAt 返回 (x,z) 的地表相对高度（0..WorldHeight-1，相对 min_y）。
@@ -172,9 +173,10 @@ func (g *NoiseGenerator) plantTrees(ch *world.Chunk) {
 			}
 			h := g.HeightAt(wx, wz)
 			// 树干 4-6 格
+			log, _ := g.treeSpeciesAt(wx, wz)
 			trunk := int32(4 + int(g.valueNoise(float64(wx), float64(wz), g.Seed+5)*3))
 			for t := int32(1); t <= trunk; t++ {
-				ch.SetBlock(x, h+t, z, stateOakLog)
+				ch.SetBlock(x, h+t, z, log)
 			}
 			top := h + trunk
 			// 树冠：顶部十字 + 下方两层 5×5（去角）
@@ -332,4 +334,99 @@ func hash3(a, b, c, seed int64) int64 {
 		h = -h
 	}
 	return h
+}
+
+// ---- 生物群系（温度/湿度双噪声简化划分） ----
+
+// 777 装饰方块状态。
+const (
+	stateShortGrass uint32 = 2363
+	stateDeadBush   uint32 = 2365
+	stateSandstone  uint32 = 677
+	stateCactus     uint32 = 8599
+	stateSnowLayer  uint32 = 8589
+	stateSpruceLog  uint32 = 143
+	stateSpruceLeaves uint32 = 322
+	stateBirchLog   uint32 = 146
+	stateOakLog2    uint32 = 8070
+)
+
+// BiomeAt 由温度/湿度噪声决定群系（确定性）。
+// 返回：0=平原 1=沙漠 2=雪原 3=森林（桦/橡混生）4=针叶林（云杉）。
+func (g *NoiseGenerator) BiomeAt(wx, wz int32) int {
+	t := g.valueNoise(float64(wx)/384, float64(wz)/384, g.Seed+555)
+	h := g.valueNoise(float64(wx)/256, float64(wz)/256, g.Seed+777)
+	switch {
+	case t > 0.45:
+		return 1 // 沙漠（干热）
+	case t < -0.45:
+		if h > 0 {
+			return 4 // 针叶林（湿冷）
+		}
+		return 2 // 雪原（干冷）
+	case h > 0.35:
+		return 3 // 森林
+	default:
+		return 0 // 平原
+	}
+}
+
+// decorate 按群系铺表面装饰与替换（在 Generate 尾部调用）。
+func (g *NoiseGenerator) decorate(ch *world.Chunk) {
+	for z := int32(0); z < 16; z++ {
+		for x := int32(0); x < 16; x++ {
+			wx, wz := ch.CX*16+x, ch.CZ*16+z
+			h := g.HeightAt(wx, wz)
+			if h <= g.SeaLevel+1 {
+				continue // 水下不装饰
+			}
+			biome := g.BiomeAt(wx, wz)
+			surface := ch.GetBlock(x, h, z)
+			switch biome {
+			case 1: // 沙漠：沙下沙岩、枯木、仙人掌
+				if surface == world.StateSand {
+					ch.SetBlock(x, h-4, z, stateSandstone)
+					r := g.valueNoise(float64(wx)*3.1, float64(wz)*3.1, g.Seed+31)
+					if r > 0.93 && ch.GetBlock(x, h+1, z) == world.StateAir {
+						ch.SetBlock(x, h+1, z, stateDeadBush)
+					} else if r < -0.955 && ch.GetBlock(x, h+1, z) == world.StateAir {
+						ht := int32(1 + int(g.valueNoise(float64(wx), float64(wz), g.Seed+7)*3))
+						for t := int32(1); t <= ht; t++ {
+							ch.SetBlock(x, h+t, z, stateCactus)
+						}
+					}
+				}
+			case 2: // 雪原：雪层
+				if surface == world.StateGrassBlock {
+					if ch.GetBlock(x, h+1, z) == world.StateAir {
+						ch.SetBlock(x, h+1, z, stateSnowLayer)
+					}
+				}
+			case 0, 3, 4: // 草本地被（森林更密）
+				r := g.valueNoise(float64(wx)*4.7, float64(wz)*4.7, g.Seed+91)
+				dens := 0.86
+				if biome == 3 || biome == 4 {
+					dens = 0.72
+				}
+				if r > dens && ch.GetBlock(x, h+1, z) == world.StateAir {
+					ch.SetBlock(x, h+1, z, stateShortGrass)
+				}
+			}
+		}
+	}
+}
+
+// treeSpeciesAt 群系决定树种（森林=桦/橡混、针叶林=云杉、其他=橡）。
+func (g *NoiseGenerator) treeSpeciesAt(wx, wz int32) (log, leaves uint32) {
+	switch g.BiomeAt(wx, wz) {
+	case 3:
+		if g.valueNoise(float64(wx)*2, float64(wz)*2, g.Seed+13) > 0 {
+			return stateBirchLog, 209 // 桦木用橡叶（同模型简化）
+		}
+		return stateOakLog2, 209
+	case 4:
+		return stateSpruceLog, stateSpruceLeaves
+	default:
+		return stateOakLog2, 209
+	}
 }

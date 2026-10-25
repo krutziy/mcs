@@ -110,6 +110,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	}
 	u := ev.use
 	if g.tryOpenCrafting(p, u) || g.tryOpenFurnace(p, u) || g.tryOpenChest(p, u) ||
+		g.tryTill(p, u) || g.tryPlantSeed(p, u) || g.tryBonemeal(p, u) ||
 		g.trySleepBed(p, u) || g.toggleDoor(p, u) {
 		return
 	}
