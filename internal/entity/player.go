@@ -43,6 +43,11 @@ type Player struct {
 	Level     int32
 	XPPending int32
 
+	// 药水效果（效果名 → 剩余刻）与药水名记账
+	Effects   map[string]int32
+	EffectAmp map[string]int32
+	PotionOf  map[[2]int32]string
+
 	// SpawnPos 个人重生点（睡床设置；零值 = 世界出生点）
 	SpawnPos [3]float64
 	Sleeping bool

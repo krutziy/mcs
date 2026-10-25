@@ -43,6 +43,9 @@ func (g *Game) handleUseItem(ev *playerUseItemEvent) {
 			packet.WriteBlockChangedAck(w, ev.sequence)
 		})
 	}
+	if g.drinkPotion(p) {
+		return
+	}
 	held := p.Held()
 	if held.ID == 0 || held.Count <= 0 || p.Food >= 20 {
 		return

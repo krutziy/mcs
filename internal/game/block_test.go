@@ -83,6 +83,8 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		creepers:      map[int32]*creeperFuse{},
 		breeds:        map[int32]*breedState{},
 		crops:         map[[3]int32]int32{},
+		brews:         map[[3]int32]*brewingState{},
+		openBrew:      map[int32][3]int32{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}
@@ -94,6 +96,8 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		SentChunks: map[[2]int32]bool{{0, 0}: true},
 	}
 	p.Health, p.Food, p.Saturation = 20, 20, 5
+	p.Effects, p.EffectAmp = map[string]int32{}, map[string]int32{}
+	p.PotionOf = map[[2]int32]string{}
 	p.GameMode = int32(mode)
 	g.players[101] = p
 	return g, p, fs

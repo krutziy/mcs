@@ -56,6 +56,7 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	}
 	g.dropFurnaceContents([3]int32{a.X, a.Y, a.Z})
 	g.dropChestContents([3]int32{a.X, a.Y, a.Z})
+	g.dropBrewingContents([3]int32{a.X, a.Y, a.Z})
 	g.harvestWheatIfMature(a.X, a.Y, a.Z, old)
 	g.breakBedIfHit(a.X, a.Y, a.Z, old)
 	g.breakDoorIfHit(a.X, a.Y, a.Z, old)
@@ -111,6 +112,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	u := ev.use
 	if g.tryOpenCrafting(p, u) || g.tryOpenFurnace(p, u) || g.tryOpenChest(p, u) ||
 		g.tryTill(p, u) || g.tryPlantSeed(p, u) || g.tryBonemeal(p, u) ||
+		g.tryOpenBrewing(p, u) ||
 		g.trySleepBed(p, u) || g.toggleDoor(p, u) {
 		return
 	}

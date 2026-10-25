@@ -121,6 +121,10 @@ type playerCloseChestEvent struct {
 	p *entity.Player
 }
 
+type playerCloseBrewEvent struct {
+	p *entity.Player
+}
+
 type playerAttackEvent struct {
 	p      *entity.Player
 	target int32
@@ -212,6 +216,8 @@ func (s *Session) PlayLoop() {
 				s.game.Submit(&playerCloseFurnaceEvent{p: p})
 			case 3:
 				s.game.Submit(&playerCloseChestEvent{p: p})
+			case 4:
+				s.game.Submit(&playerCloseBrewEvent{p: p})
 			}
 		case "minecraft:attack":
 			s.game.Submit(&playerAttackEvent{p: p, target: pr.VarInt()})

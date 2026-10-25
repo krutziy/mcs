@@ -84,6 +84,9 @@ type Game struct {
 	leafQueue    [][3]int32               // 待枯萎判定的叶子
 	breeds       map[int32]*breedState    // 动物繁殖状态
 	crops        map[[3]int32]int32       // 小麦作物（位置 → 种植标记）
+	brews        map[[3]int32]*brewingState // 酿造台（位置 → 状态）
+	openBrew     map[int32][3]int32        // 打开中的酿造台
+	brewing      map[[2]string]string      // 酿造表（输入药水+材料 → 产物）
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
@@ -107,6 +110,8 @@ func New(cfg Config, suite *version.Suite) *Game {
 		openFurnace:    map[int32][3]int32{},
 		breeds:         map[int32]*breedState{},
 		crops:          map[[3]int32]int32{},
+		brews:         map[[3]int32]*brewingState{},
+		openBrew:      map[int32][3]int32{},
 		chests:         map[[3]int32]*chestState{},
 		openChest:      map[int32][3]int32{},
 		orbs:           map[int32]*xpOrb{},
@@ -158,6 +163,9 @@ func New(cfg Config, suite *version.Suite) *Game {
 		if tg := assets.ItemTags(p); len(tg) > 0 {
 			g.itemTags = tg
 		}
+		if bw := assets.Brewing(p); len(bw) > 0 {
+			g.brewing = bw
+		}
 		if sm := assets.Smelting(p); len(sm) > 0 {
 			g.smelting = sm
 		}
@@ -195,6 +203,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		g.loadFurnaces()
 	g.loadWeather()
 	g.loadChests()
+	g.loadBrewings()
 	g.loadInteractTables()
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
@@ -277,6 +286,8 @@ func (g *Game) tickNow() {
 	g.tickWeather()
 	g.tickBreeds()
 	g.tickCrops()
+	g.tickBrewings()
+	g.tickEffects()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒
@@ -302,6 +313,7 @@ func (g *Game) saveAll() {
 	_ = os.WriteFile(filepath.Join(g.Cfg.SaveDir, "time.json"), mb, 0o644)
 	g.saveFurnaces()
 	g.saveChests()
+	g.saveBrewings()
 	g.saveWeather()
 	for _, p := range g.players {
 		g.savePlayer(p)
@@ -384,6 +396,10 @@ func (g *Game) handleEvent(e Event) {
 	case *playerCloseChestEvent:
 		if ev.p != nil {
 			g.closeChest(ev.p)
+		}
+	case *playerCloseBrewEvent:
+		if ev.p != nil {
+			g.closeBrewing(ev.p)
 		}
 	}
 	g.flushBlockUpdates()
@@ -478,6 +494,7 @@ func (g *Game) handleJoin(s *Session) {
 	}
 	p.Health, p.Food, p.Saturation = 20, 20, 5
 	p.GameMode = int32(g.Cfg.GameMode)
+	p.Effects, p.EffectAmp, p.PotionOf = map[string]int32{}, map[string]int32{}, map[[2]int32]string{}
 	s.SendPlay("minecraft:login", func(w *protocol.Writer) {
 		packet.WriteJoinGame(w, join)
 	})
@@ -614,6 +631,9 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 	}
 	if _, ok := g.openChest[p.EntityID]; ok {
 		g.closeChest(p)
+	}
+	if _, ok := g.openBrew[p.EntityID]; ok {
+		g.closeBrewing(p)
 	}
 	delete(g.players, p.EntityID)
 	g.count.Store(int32(len(g.players)))

@@ -320,3 +320,19 @@ func BlockNames(proto int32) map[uint32]string {
 	}
 	return m
 }
+
+// Brewing 返回酿造表（输入药水名 材料 → 产物药水名；空输入名=任意水瓶）。
+func Brewing(proto int32) map[[2]string]string {
+	b, err := files.ReadFile(fmt.Sprintf("data/brewing_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[[2]string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) == 3 {
+			m[[2]string{parts[0], parts[1]}] = parts[2]
+		}
+	}
+	return m
+}

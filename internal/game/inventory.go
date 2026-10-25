@@ -88,6 +88,36 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 		g.syncChest(p, pos)
 		return
 	}
+	// 酿造台窗口 4：独立路由
+	if ev.click.Window == 4 {
+		pos, ok := g.openBrew[p.EntityID]
+		if !ok || g.brews[pos] == nil {
+			return
+		}
+		bs := g.brews[pos]
+		slot := int32(ev.click.Slot)
+		if ev.click.Mode == packet.ClickModeClick {
+			if ref := brewingSlotRef(bs, p, slot); ref != nil {
+				wasPotion := slot >= 0 && slot <= 2 && ref.ID != 0
+				potionName := ""
+				if wasPotion {
+					potionName = bs.potion[slot]
+				}
+				if ev.click.Button == 0 {
+					leftClickSlotRef(p, ref)
+				} else if ev.click.Button == 1 {
+					rightClickSlotRef(p, ref)
+				}
+				// 从药水槽取走 → 光标药水记账
+				if wasPotion && potionName != "" &&
+					(p.Cursor.ID == itemPotion || p.Cursor.ID == itemSplash || p.Cursor.ID == itemLingering) {
+					p.PotionOf[[2]int32{-1, 0}] = potionName
+				}
+			}
+		}
+		g.syncBrewing(p, pos)
+		return
+	}
 	// 熔炉窗口 2：独立路由
 	if ev.click.Window == 2 {
 		pos, ok := g.openFurnace[p.EntityID]
@@ -206,7 +236,20 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 
 // leftClickSlot 左键（窗口 0 槽位）。
 func leftClickSlot(p *entity.Player, slot int32) {
+	// 光标药水放置到槽位：迁移药水名记账
+	cursorPotion := p.PotionOf[[2]int32{-1, 0}]
 	leftClickSlotRef(p, &p.Slots[slot])
+	if p.Cursor.ID == 0 && p.Slots[slot].ID != 0 && cursorPotion != "" {
+		p.PotionOf[[2]int32{slot, 0}] = cursorPotion
+		delete(p.PotionOf, [2]int32{-1, 0})
+	}
+	// 从槽位拾取药水到光标
+	if p.Cursor.ID != 0 && p.Slots[slot].ID == 0 {
+		if n := p.PotionOf[[2]int32{slot, 0}]; n != "" {
+			p.PotionOf[[2]int32{-1, 0}] = n
+			delete(p.PotionOf, [2]int32{slot, 0})
+		}
+	}
 }
 
 // leftClickSlotRef 左键：光标与任意槽位引用 拾取/放置/交换/合并。

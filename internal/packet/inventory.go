@@ -12,7 +12,8 @@ const InvSlots = 46
 type ItemSlot struct {
 	ID     int32
 	Count  int32
-	Damage int32 // 已损失耐久（>0 时输出 damage 组件，组件 ID 3）
+	Damage int32  // 已损失耐久（>0 时输出 damage 组件，组件 ID 3）
+	Potion string // 药水短名（非空时输出 potion_contents 组件，组件 ID 26）
 }
 
 // WriteEmptySlot 写入空 Slot 字段。
@@ -133,4 +134,48 @@ func WriteContainerSetData(w *protocol.Writer, window int32, property int16, val
 	w.VarInt(window)
 	w.Int16(property)
 	w.Int16(value)
+}
+
+// WriteSlotPotion 写入带 potion_contents 组件（组件 ID 26）的药水 Slot。
+// potion 组件载荷：VarInt 组件数=1 + 组件 ID + NBT{potion:"minecraft:名"}。
+func WriteSlotPotion(w *protocol.Writer, itemID, count int32, potion string) {
+	w.Bool(true)
+	w.VarInt(itemID)
+	w.VarInt(count)
+	w.VarInt(1)                          // 增补组件数
+	w.VarInt(26)                         // minecraft:potion_contents
+	writePotionContents(w, potion)
+	w.VarInt(0)                          // 移除组件数
+}
+
+// writePotionContents potion_contents 组件载荷（NBT Compound）。
+func writePotionContents(w *protocol.Writer, potion string) {
+	if potion == "" {
+		potion = "water"
+	}
+	protocol.WriteNBT(w, protocol.Compound{"potion": "minecraft:" + potion})
+}
+
+// WriteContainerSetContentPotion 同 WriteContainerSetContent 但药水槽带组件。
+func WriteContainerSetContentPotion(w *protocol.Writer, window, state int32, slots []ItemSlot, carried ItemSlot) {
+	w.VarInt(window)
+	w.VarInt(state)
+	w.VarInt(int32(len(slots)))
+	for _, s := range slots {
+		switch {
+		case s.ID == 0:
+			WriteEmptySlot(w)
+		case s.Potion != "":
+			WriteSlotPotion(w, s.ID, s.Count, s.Potion)
+		default:
+			WriteSlotDamage(w, s.ID, s.Count, s.Damage)
+		}
+	}
+	if carried.ID == 0 {
+		WriteEmptySlot(w)
+	} else if carried.Potion != "" {
+		WriteSlotPotion(w, carried.ID, carried.Count, carried.Potion)
+	} else {
+		WriteSlotDamage(w, carried.ID, carried.Count, carried.Damage)
+	}
 }

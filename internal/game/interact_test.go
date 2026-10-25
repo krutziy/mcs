@@ -583,3 +583,59 @@ func TestBonemeal(t *testing.T) {
 		t.Fatal("树苗应长成原木")
 	}
 }
+
+// TestBrewingAndDrink 酿造全流程：水瓶+烈焰粉→力量药水，饮用生效。
+func TestBrewingAndDrink(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	g.brewing = assets.Brewing(777)
+	if g.brewing[[2]string{"", "nether_wart"}] == "" && g.brewing[[2]string{"awkward", "blaze_powder"}] != "strength" {
+		t.Fatal("酿造表资产异常")
+	}
+	// 放酿造台并打开
+	g.world.SetBlock(8, -61, 8, brewingStandState)
+	if !g.tryOpenBrewing(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1}) {
+		t.Fatal("右键酿造台应打开")
+	}
+	if fs.find("minecraft:open_screen") == nil {
+		t.Fatal("应发 open_screen")
+	}
+	pos := [3]int32{8, -61, 8}
+	bs := g.brews[pos]
+	// awkward 药水在 0 槽 + 烈焰粉材料
+	bs.slots[0] = entity.Item{ID: itemPotion, Count: 1}
+	bs.potion[0] = "awkward"
+	bs.slots[3] = entity.Item{ID: ids["blaze_powder"], Count: 1}
+	for i := 0; i < 410; i++ {
+		g.tickBrewings()
+	}
+	if bs.potion[0] != "strength" {
+		t.Fatalf("应酿出力量药水: %q", bs.potion[0])
+	}
+	if bs.slots[3].ID != 0 {
+		t.Fatal("材料应消耗")
+	}
+
+	// 取药水到手（光标）再放到快捷栏，饮用
+	p.Cursor = entity.Item{ID: itemPotion, Count: 1}
+	p.PotionOf[[2]int32{-1, 0}] = "strength"
+	p.Slots[36] = entity.Item{}
+	leftClickSlot(p, 36)
+	if p.PotionOf[[2]int32{36, 0}] != "strength" || p.Slots[36].ID != itemPotion {
+		t.Fatalf("药水名记账应迁移: %+v %v", p.Slots[36], p.PotionOf)
+	}
+	g.handleUseItem(&playerUseItemEvent{p: p, sequence: 9})
+	if p.Effects["strength"] <= 0 {
+		t.Fatal("饮用力量药水应生效")
+	}
+	if p.Slots[36].ID != 0 {
+		t.Fatal("药水应消耗")
+	}
+	// 效果到期
+	p.Effects["strength"] = 20
+	g.tick = 25
+	g.tickEffects()
+	if _, ok := p.Effects["strength"]; ok {
+		t.Fatal("效果应到期")
+	}
+}
