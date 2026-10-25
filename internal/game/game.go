@@ -83,6 +83,7 @@ type Game struct {
 	creepers     map[int32]*creeperFuse   // 苦力怕引信
 	leafQueue    [][3]int32               // 待枯萎判定的叶子
 	breeds       map[int32]*breedState    // 动物繁殖状态
+	crops        map[[3]int32]int32       // 小麦作物（位置 → 种植标记）
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
@@ -105,6 +106,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		furnaces:       map[[3]int32]*furnaceState{},
 		openFurnace:    map[int32][3]int32{},
 		breeds:         map[int32]*breedState{},
+		crops:          map[[3]int32]int32{},
 		chests:         map[[3]int32]*chestState{},
 		openChest:      map[int32][3]int32{},
 		orbs:           map[int32]*xpOrb{},
@@ -274,6 +276,7 @@ func (g *Game) tickNow() {
 	g.tickLeafDecay()
 	g.tickWeather()
 	g.tickBreeds()
+	g.tickCrops()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒

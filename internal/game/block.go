@@ -56,6 +56,7 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	}
 	g.dropFurnaceContents([3]int32{a.X, a.Y, a.Z})
 	g.dropChestContents([3]int32{a.X, a.Y, a.Z})
+	g.harvestWheatIfMature(a.X, a.Y, a.Z, old)
 	g.breakBedIfHit(a.X, a.Y, a.Z, old)
 	g.breakDoorIfHit(a.X, a.Y, a.Z, old)
 	g.applyBlock(a.X, a.Y, a.Z, world.StateAir, a.Sequence, p)
@@ -80,6 +81,12 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 // 需镐方块（mineable/pickaxe）只有手持足够材质的镐才掉落。
 // 返回的物品 ID 为 777 基准空间。
 func (g *Game) digDrops(p *entity.Player, state uint32) []entity.Item {
+	// 小麦作物由 harvestWheatIfMature 专用处理（掉落表是"任意年龄掉麦"的简化）
+	for _, wa := range wheatAges {
+		if state == wa {
+			return nil
+		}
+	}
 	item, ok := g.blockDrops[777][state]
 	if !ok {
 		return nil

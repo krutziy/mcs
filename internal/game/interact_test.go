@@ -490,3 +490,59 @@ func TestBreedAnimals(t *testing.T) {
 		t.Fatal("冷却中喂食应无效")
 	}
 }
+
+// TestFarmTillAndPlant 锄地 + 种麦 + 生长 + 收获。
+func TestFarmTillAndPlant(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	g.world.SetBlock(8, -62, 8, world.StateStone) // 地基（悬空不可锄）
+	g.world.SetBlock(8, -61, 8, world.StateDirt)
+
+	// 锄头锄地
+	p.Slots[36] = entity.Item{ID: ids["wooden_hoe"], Count: 1}
+	if !g.tryTill(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1, Sequence: 1}) {
+		t.Fatal("锄头右键泥土应耕地")
+	}
+	if s := g.world.GetBlock(8, -61, 8); s != farmlandState && s != farmlandWet {
+		t.Fatalf("应为耕地: %d", s)
+	}
+	if fs.find("minecraft:block_update") == nil && fs.find("minecraft:section_blocks_update") == nil {
+		t.Fatal("应广播耕地变更")
+	}
+
+	// 种子种植
+	p.Slots[36] = entity.Item{ID: ids["wheat_seeds"], Count: 3}
+	if !g.tryPlantSeed(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1, Sequence: 2}) {
+		t.Fatal("种子右键耕地应种植")
+	}
+	if g.world.GetBlock(8, -60, 8) != wheatAges[0] {
+		t.Fatalf("应为 age0 小麦: %d", g.world.GetBlock(8, -60, 8))
+	}
+	if p.Slots[36].Count != 2 {
+		t.Fatal("应消耗 1 种子")
+	}
+
+	// 生长循环到成熟
+	for i := 0; i < 400 && g.world.GetBlock(8, -60, 8) != wheatAges[7]; i++ {
+		g.tick += 30
+		g.tickCrops()
+	}
+	if g.world.GetBlock(8, -60, 8) != wheatAges[7] {
+		t.Fatalf("应长到成熟: %d", g.world.GetBlock(8, -60, 8))
+	}
+
+	// 收获：掉麦+种子
+	g.handleDig(&blockDigEvent{p: p, act: packet.PlayerAction{Status: packet.DigFinish, X: 8, Y: -60, Z: 8, Sequence: 3}})
+	wheatN, seedN := 0, 0
+	for _, ie := range g.items {
+		if ie.item.ID == ids["wheat"] {
+			wheatN++
+		}
+		if ie.item.ID == ids["wheat_seeds"] {
+			seedN++
+		}
+	}
+	if wheatN != 1 || seedN < 1 {
+		t.Fatalf("收获应掉 1 麦 + ≥1 种子: %d %d", wheatN, seedN)
+	}
+}
