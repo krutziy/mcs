@@ -209,6 +209,7 @@ func (g *Game) itemNameOf777(id int32) string {
 		g.itemNameCache = map[int32]string{}
 		for name, iid := range assets.ItemIDs(777) {
 			g.itemNameCache[iid] = name
+			itemNameToID777[name] = iid
 		}
 	}
 	return g.itemNameCache[id]

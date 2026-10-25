@@ -79,19 +79,21 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		fallings:      map[int32]*fallingBlock{},
 		saplings:      map[[3]int32]int32{},
 		orbs:          map[int32]*xpOrb{},
+		arrows:        map[int32]*arrow{},
+		creepers:      map[int32]*creeperFuse{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}
 	fs := &fakeSender{}
 	p := &entity.Player{
-		EntityID: 1, Name: "Tester",
+		EntityID: 101, Name: "Tester",
 		X: 8.5, Y: -59, Z: 8.5,
 		Send:       fs,
 		SentChunks: map[[2]int32]bool{{0, 0}: true},
 	}
 	p.Health, p.Food, p.Saturation = 20, 20, 5
 	p.GameMode = int32(mode)
-	g.players[1] = p
+	g.players[101] = p
 	return g, p, fs
 }
 

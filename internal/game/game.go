@@ -77,6 +77,9 @@ type Game struct {
 	waterQueue   [][3]int32                // 待流水位置
 	saplings     map[[3]int32]int32        // 树苗（位置 → 树龄）
 	orbs         map[int32]*xpOrb          // 经验球实体
+	arrows       map[int32]*arrow         // 箭矢实体
+	creepers     map[int32]*creeperFuse   // 苦力怕引信
+	leafQueue    [][3]int32               // 待枯萎判定的叶子
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
@@ -253,6 +256,10 @@ func (g *Game) tickNow() {
 	g.tickWater()
 	g.tickSaplings()
 	g.tickOrbs()
+	g.tickArrows()
+	g.tickCreepers()
+	g.tickUndeadBurn()
+	g.tickLeafDecay()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒

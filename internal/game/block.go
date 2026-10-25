@@ -66,6 +66,7 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	}
 	g.triggerGravity(a.X, a.Y+1, a.Z) // 上方重力方块塌落
 	g.scheduleWaterFlow(a.X, a.Y, a.Z) // 邻水流入
+	g.scheduleLeafCheck(a.X, a.Y, a.Z) // 周围叶子重算枯萎
 	// 生存模式：按掉落表生成掉落物（需镐方块还要材质门槛）
 	if !g.isCreative(p) {
 		bus.Drops = g.digDrops(p, old)

@@ -316,3 +316,115 @@ func TestDeathDrops(t *testing.T) {
 		t.Fatal("经验应折半掉球")
 	}
 }
+
+// TestSkeletonShootsArrow 骷髅射箭：箭生成、飞行、命中玩家。
+func TestSkeletonShootsArrow(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	g.world.SetBlock(6, -61, 8, world.StateStone)
+	g.world.SetBlock(7, -61, 8, world.StateStone)
+	m := g.spawnMob("skeleton", 6.5, -60, 8.5)
+	for i := 0; i < 60 && len(g.arrows) == 0; i++ {
+		g.tickHostileAI(m)
+	}
+	if len(g.arrows) == 0 {
+		t.Fatal("骷髅应射箭")
+	}
+	if fs.find("minecraft:add_entity") == nil {
+		t.Fatal("应广播箭实体")
+	}
+	// 飞行到命中
+	for i := 0; i < 60 && p.Health == 20; i++ {
+		g.tickArrows()
+	}
+	if p.Health >= 20 {
+		t.Fatal("箭应命中玩家")
+	}
+}
+
+// TestCreeperExplodes 苦力怕引信到点爆炸：破坏方块+伤害玩家+自灭。
+func TestCreeperExplodes(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	g.world.SetBlock(8, -61, 8, world.StateStone) // 站位地板
+	m := g.spawnMob("creeper", 8.5, -60, 8.5)
+	// 贴脸触发引信
+	g.tickHostileAI(m)
+	if g.creepers[m.eid] == nil {
+		t.Fatal("近身应点燃苦力怕")
+	}
+	for i := int32(0); i < 31; i++ {
+		g.tickCreepers()
+	}
+	if _, exists := g.mobs[m.eid]; exists {
+		t.Fatal("爆炸后苦力怕应消失")
+	}
+	if p.Health >= 20 {
+		t.Fatal("爆炸应伤害玩家")
+	}
+}
+
+// TestExplodeBlocks 爆炸半径破坏。
+func TestExplodeBlocks(t *testing.T) {
+	g, _, _ := newInteractGame(t)
+	for dx := int32(-2); dx <= 2; dx++ {
+		for dz := int32(-2); dz <= 2; dz++ {
+			g.world.SetBlock(50+dx, -61, 50+dz, world.StateStone)
+		}
+	}
+	g.explode(50.5, -60.5, 50.5, 3)
+	if got := g.world.GetBlock(50, -61, 50); got != world.StateAir {
+		t.Fatalf("中心应被炸空: %d", got)
+	}
+}
+
+// TestUndeadBurn 亡灵白天燃烧，夜里不烧。
+func TestUndeadBurn(t *testing.T) {
+	g, _, _ := newInteractGame(t)
+	z := g.spawnMob("zombie", 100.5, -60, 100.5)
+	g.world.SetBlock(100, -61, 100, world.StateStone)
+	g.dayTime = 6000 // 正午
+	g.tick = 20
+	g.tickUndeadBurn()
+	if z.health >= 20 {
+		t.Fatal("白天无遮挡僵尸应燃烧扣血")
+	}
+	g.dayTime = 14000
+	z.health = 20
+	g.tick = 40
+	g.tickUndeadBurn()
+	if z.health != 20 {
+		t.Fatal("夜里不应燃烧")
+	}
+}
+
+// TestLeafDecay 树叶枯萎：原木移除后远处叶子消失。
+func TestLeafDecay(t *testing.T) {
+	g, _, _ := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	if g.itemNames[777] == nil {
+		g.itemNames[777] = map[int32]string{}
+	}
+	for name, id := range ids {
+		g.itemNames[777][id] = name
+	}
+	// 独立叶子块（无原木支撑）
+	g.world.SetBlock(80, -60, 80, leavesDistance[7])
+	g.scheduleLeafCheck(80, -60, 80)
+	for i := 0; i < 6; i++ {
+		g.tick = int64(i*10 + 10)
+		g.tickLeafDecay()
+	}
+	if got := g.world.GetBlock(80, -60, 80); got != world.StateAir {
+		t.Fatalf("无支撑叶子应枯萎: %d", got)
+	}
+	// 原木旁的叶子保留
+	g.world.SetBlock(90, -61, 90, logState)
+	g.world.SetBlock(90, -60, 90, leavesDistance[3])
+	g.scheduleLeafCheck(90, -60, 90)
+	for i := 0; i < 6; i++ {
+		g.tick = int64(i*10 + 10)
+		g.tickLeafDecay()
+	}
+	if got := g.world.GetBlock(90, -60, 90); !isLeaves(got) {
+		t.Fatal("原木旁叶子不应枯萎")
+	}
+}

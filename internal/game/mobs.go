@@ -30,6 +30,8 @@ var mobKinds = map[string]mobKind{
 	"chicken": {name: "chicken", health: 4, speed: 0.04},
 	"rabbit": {name: "rabbit", health: 3, speed: 0.07},
 	"zombie": {name: "zombie", health: 20, speed: 0.07, hostile: true, damage: 3},
+	"skeleton": {name: "skeleton", health: 20, speed: 0.06, hostile: true, damage: 0},
+	"creeper": {name: "creeper", health: 20, speed: 0.07, hostile: true, damage: 0},
 }
 
 var passiveKinds = []string{"pig", "sheep", "cow", "chicken", "rabbit"}
@@ -99,7 +101,19 @@ func (g *Game) tickMobs() {
 		m.age++
 		// AI
 		if m.kind.hostile {
-			if target := g.nearestPlayer(m.x, m.y, m.z, 16); target != nil && !target.Dead {
+			if m.kind.name == "skeleton" || m.kind.name == "creeper" {
+				g.tickHostileAI(m)
+				if m.kind.name == "creeper" && g.creepers[m.eid] == nil {
+					// 苦力怕也要追人（引信逻辑在 tickHostileAI）
+					if target := g.nearestPlayer(m.x, m.y, m.z, 16); target != nil && !target.Dead {
+						dx, dz := target.X-m.x, target.Z-m.z
+						if d := math.Sqrt(dx*dx + dz*dz); d > 2.5 {
+							m.x += dx / d * m.kind.speed
+							m.z += dz / d * m.kind.speed
+						}
+					}
+				}
+			} else if target := g.nearestPlayer(m.x, m.y, m.z, 16); target != nil && !target.Dead {
 				dx, dz := target.X-m.x, target.Z-m.z
 				d := math.Sqrt(dx*dx + dz*dz)
 				if d > 1.4 {
