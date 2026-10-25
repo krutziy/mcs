@@ -264,60 +264,120 @@ func writeSingleContainer(w *protocol.Writer, value int32) {
 	w.VarInt(value)
 }
 
-// writeLight 写入光照段。复刻官方 26.1 平坦世界的下发模式：
-//   - 天空光数据只发地表之上两节：topSec+1（前 1/4 为 0，官方如此）与 topSec+2（全亮）
-//   - 地表节标记进"空天空光"掩码，更低的节不提及
-//   - 方块光：地表以下三节标记为空，无数据数组
-//   - 末尾一个 0x00 字节（语义未知，官方抓包存在）
+// writeLight 写入光照段：真实天光传播。
+//   - 每列从顶向下：非不透明处光 15 直射，遇不透明截断
+//   - 从全亮格 BFS 横向/向下扩散（每步 -1），不透明格不透光但自身接受光照
+//   - 掩码按节生成；无变化的节标记进空掩码（全 0）
+//   - 方块光暂无光源，全空
 func (c *Chunk) writeLight(w *protocol.Writer) {
-	top := int32(0)
-	for x := int32(0); x < 16; x++ {
-		for z := int32(0); z < 16; z++ {
-			if h := c.heightOf(x, z, isOpaque); h > top {
-				top = h
-			}
-		}
-	}
-	topSec := clampI(top/16, 0, NumSections-3)
+	sky := c.computeSkyLight()
 
 	skyData := make([]bool, NumSections)
 	skyEmpty := make([]bool, NumSections)
 	blockEmpty := make([]bool, NumSections)
-	if topSec+1 < NumSections {
-		skyData[topSec+1] = true
-	}
-	if topSec+2 < NumSections {
-		skyData[topSec+2] = true
-	}
-	skyEmpty[topSec] = true
-	for i := int32(0); i <= topSec+2 && i < NumSections; i++ {
-		blockEmpty[i] = true
+	arrays := make([][]byte, NumSections)
+	for sec := int32(0); sec < NumSections; sec++ {
+		nonEmpty := false
+		allMax := true
+		arr := make([]byte, 2048)
+		for y := int32(0); y < 16; y++ {
+			for z := int32(0); z < 16; z++ {
+				for x := int32(0); x < 16; x++ {
+					lv := sky[sec*4096+y*256+z*16+x]
+					if lv > 0 {
+						nonEmpty = true
+					}
+					if lv < 15 {
+						allMax = false
+					}
+					if lv > 0 {
+						idx := (y*256 + z*16 + x) / 2
+						if (y*256+z*16+x)%2 == 0 {
+							arr[idx] |= byte(lv)
+						} else {
+							arr[idx] |= byte(lv) << 4
+						}
+					}
+				}
+			}
+		}
+		if nonEmpty && !allMax {
+			skyData[sec] = true
+			arrays[sec] = arr
+		} else if allMax {
+			skyEmpty[sec] = false // 全 15 也需下发？官方把全亮节标空省流量——但语义是"无光照数据=保持默认 0"，故全亮节必须发
+			skyData[sec] = true
+			arrays[sec] = bytesOf(0xFF, 2048)
+		} else {
+			skyEmpty[sec] = true // 全 0
+		}
+		blockEmpty[sec] = true
 	}
 
 	writeBitset(w, skyData)
-	w.VarInt(0) // 方块光数据掩码：0 个 long（官方如此）
+	w.VarInt(0) // 方块光数据掩码
 	writeBitset(w, skyEmpty)
 	writeBitset(w, blockEmpty)
-
-	skyArrayCount := int32(0)
-	if topSec+1 < NumSections {
-		skyArrayCount++
-	}
-	if topSec+2 < NumSections {
-		skyArrayCount++
-	}
-	w.VarInt(skyArrayCount) // 天空光数组数量前缀
-	if topSec+1 < NumSections {
-		arr := make([]byte, 2048)
-		for i := 512; i < 2048; i++ { // 前 512 字节 0，其余 0xFF（官方模式）
-			arr[i] = 0xFF
+	n := int32(0)
+	for _, has := range skyData {
+		if has {
+			n++
 		}
-		w.ByteArray(arr)
 	}
-	if topSec+2 < NumSections {
-		w.ByteArray(bytesOf(0xFF, 2048))
+	w.VarInt(n)
+	for sec := int32(0); sec < NumSections; sec++ {
+		if skyData[sec] {
+			w.ByteArray(arrays[sec])
+		}
 	}
 	w.VarInt(0) // 方块光数组数量
+}
+
+// computeSkyLight 计算区块天光（0..15，索引 sec*4096 + y*256 + z*16 + x）。
+// 列直射 + BFS 扩散；不含跨区块光（邻接暗边在邻块计算时由客户端插值，可接受）。
+func (c *Chunk) computeSkyLight() []byte {
+	light := make([]byte, NumSections*4096)
+	type pos struct{ x, y, z int32 }
+	queue := make([]pos, 0, 4096)
+
+	// 列直射：从每列顶部向下，直到不透明
+	for x := int32(0); x < 16; x++ {
+		for z := int32(0); z < 16; z++ {
+			for y := int32(WorldHeight - 1); y >= 0; y-- {
+				if isOpaque(c.GetBlock(x, y, z)) {
+					break
+				}
+				idx := y/16*4096 + (y%16)*256 + z*16 + x
+				light[idx] = 15
+				queue = append(queue, pos{x, y, z})
+			}
+		}
+	}
+	// BFS 扩散（6 向，每步 -1；不透明格不发出光）
+	for head := 0; head < len(queue); head++ {
+		p := queue[head]
+		lv := light[p.y/16*4096+(p.y%16)*256+p.z*16+p.x]
+		if lv <= 1 {
+			continue
+		}
+		for _, d := range [6][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}} {
+			nx, ny, nz := p.x+d[0], p.y+d[1], p.z+d[2]
+			if nx < 0 || nx > 15 || nz < 0 || nz > 15 || ny < 0 || ny >= WorldHeight {
+				continue
+			}
+			if isOpaque(c.GetBlock(nx, ny, nz)) {
+				continue
+			}
+			idx := ny/16*4096 + (ny%16)*256 + nz*16 + nx
+			if light[idx] < lv-1 {
+				light[idx] = lv - 1
+				if lv-1 > 1 {
+					queue = append(queue, pos{nx, ny, nz})
+				}
+			}
+		}
+	}
+	return light
 }
 
 func clampI(v, lo, hi int32) int32 {

@@ -76,7 +76,11 @@ func (g *NoiseGenerator) Generate(ch *world.Chunk) {
 				case y >= h-3:
 					ch.SetBlock(x, y, z, world.StateDirt)
 				default:
-					ch.SetBlock(x, y, z, world.StateStone)
+					if y < deepslateY {
+						ch.SetBlock(x, y, z, stateDeepslate)
+					} else {
+						ch.SetBlock(x, y, z, world.StateStone)
+					}
 				}
 			}
 			for y := h + 1; y <= g.SeaLevel; y++ {
@@ -84,6 +88,7 @@ func (g *NoiseGenerator) Generate(ch *world.Chunk) {
 			}
 		}
 	}
+	g.plantOres(ch)
 	g.plantTrees(ch)
 }
 
@@ -202,4 +207,129 @@ func abs(v int32) int32 {
 		return -v
 	}
 	return v
+}
+
+// 777 基准矿石状态（官方 reports）。
+const (
+	stateDeepslate    uint32 = 33774
+	stateCoalOre      uint32 = 136
+	stateIronOre      uint32 = 134
+	stateCopperOre    uint32 = 31147
+	stateGoldOre      uint32 = 132
+	stateDiamondOre   uint32 = 6863
+	stateEmeraldOre   uint32 = 11315
+	stateLapisOre     uint32 = 662
+	stateRedstoneOre  uint32 = 8552
+	stateDSCoalOre    uint32 = 137
+	stateDSIronOre    uint32 = 135
+	stateDSCopperOre  uint32 = 31148
+	stateDSGoldOre    uint32 = 133
+	stateDSDiamondOre uint32 = 6864
+	stateDSEmerald    uint32 = 11316
+	stateDSLapisOre   uint32 = 663
+	stateDSRedstone   uint32 = 8554
+)
+
+// oreVein 矿脉定义：矿种（表层/深层）、生成高度带（相对 min_y）、尝试密度与脉大小。
+type oreVein struct {
+	normal, deep uint32 // 石层/深板岩层状态
+	yLo, yHi     int32  // 高度带（相对 min_y；overworld -64..320 → 0..384）
+	tries        int    // 每区块尝试次数
+	size         int    // 脉内方块数
+}
+
+// 原版近似分布（公开数值的简化：频次×高度带）。
+var oreVeins = []oreVein{
+	{stateCoalOre, stateDSCoalOre, 32, 152, 14, 12},
+	{stateIronOre, stateDSIronOre, 8, 120, 12, 8},
+	{stateCopperOre, stateDSCopperOre, 8, 100, 8, 9},
+	{stateGoldOre, stateDSGoldOre, 4, 48, 4, 8},
+	{stateRedstoneOre, stateDSRedstone, 4, 24, 6, 8},
+	{stateDiamondOre, stateDSDiamondOre, 4, 24, 3, 7},
+	{stateLapisOre, stateDSLapisOre, 4, 40, 2, 6},
+	{stateEmeraldOre, stateDSEmerald, 60, 120, 1, 3},
+}
+
+// deepslateY 深板岩起始相对高度（绝对 y≈0 → 相对 64）。
+const deepslateY = 60
+
+// plantOres 在石层里撒矿脉（确定性：seed+区块坐标）。
+func (g *NoiseGenerator) plantOres(ch *world.Chunk) {
+	for i, v := range oreVeins {
+		for try := 0; try < v.tries; try++ {
+			// 每次尝试一个随机起点（区块坐标 + 矿种 + 尝试序号派生）
+			h1 := int32(hash3(int64(ch.CX), int64(ch.CZ), int64(i*1000+try), g.Seed+77))
+			h2 := int32(hash3(int64(ch.CZ), int64(ch.CX), int64(try*31+i), g.Seed+991))
+			h3 := int32(hash3(int64(ch.CX)*31, int64(ch.CZ)+int64(try), int64(i), g.Seed+13))
+			x, z := h1&15, h2&15
+			if x < 0 {
+				x = -x
+			}
+			if z < 0 {
+				z = -z
+			}
+			span := v.yHi - v.yLo
+			y := v.yLo + h3%span
+			if y < 0 {
+				y = -y % span
+			}
+			g.growVein(ch, x, y, z, v, try)
+		}
+	}
+}
+
+// growVein 从种子点随机游走生成矿脉（替换石/深板岩）。
+func (g *NoiseGenerator) growVein(ch *world.Chunk, x, y, z int32, v oreVein, salt int) {
+	ore := v.normal
+	if y < deepslateY {
+		ore = v.deep
+	}
+	for n := 0; n < v.size; n++ {
+		if x >= 0 && x < 16 && z >= 0 && z < 16 && y > 1 && y < world.WorldHeight-1 {
+			cur := ch.GetBlock(x, y, z)
+			if cur == world.StateStone || cur == stateDeepslate {
+				ch.SetBlock(x, y, z, ore)
+			}
+		}
+		// 随机游走（确定性）
+		d := hash3(int64(x)+int64(salt), int64(y), int64(z), g.Seed+int64(n))
+		switch d % 3 {
+		case 0:
+			x += int32(d%3) - 1
+		case 1:
+			y += int32((d>>8)%3) - 1
+		default:
+			z += int32((d>>16)%3) - 1
+		}
+		if x < 0 {
+			x = 0
+		}
+		if x > 15 {
+			x = 15
+		}
+		if z < 0 {
+			z = 0
+		}
+		if z > 15 {
+			z = 15
+		}
+		if y < 1 {
+			y = 1
+		}
+	}
+}
+
+// hash3 组合三坐标与种子的确定性哈希（非密码学，均匀性够用）。
+func hash3(a, b, c, seed int64) int64 {
+	h := seed
+	h = h*6364136223846793005 + a*1442695040888963407
+	h ^= h >> 33
+	h = h*6364136223846793005 + b*1442695040888963407
+	h ^= h >> 33
+	h = h*6364136223846793005 + c*1442695040888963407
+	h ^= h >> 33
+	if h < 0 {
+		h = -h
+	}
+	return h
 }

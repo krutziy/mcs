@@ -78,3 +78,37 @@ func TestManagerSetBlockWithGenerator(t *testing.T) {
 		t.Fatalf("改写后应为空气，实际 %d", got)
 	}
 }
+
+// TestSkyLightPropagation 天光语义：地表上全亮、实体下全黑、洞口横向扩散衰减。
+func TestSkyLightPropagation(t *testing.T) {
+	ch := NewChunk(0, 0, 0)
+	// 平板：y=64（相对 128）一层石头，中间留 2x2 洞
+	for x := int32(0); x < 16; x++ {
+		for z := int32(0); z < 16; z++ {
+			ch.SetBlock(x, 128, z, StateStone)
+		}
+	}
+	ch.SetBlock(8, 128, 8, StateAir) // 洞
+	light := ch.computeSkyLight()
+	at := func(x, y, z int32) byte { return light[y/16*4096+(y%16)*256+z*16+x] }
+	// 石板上方：15
+	if at(4, 130, 4) != 15 {
+		t.Fatalf("地表上方应全亮: %d", at(4, 130, 4))
+	}
+	// 石板下方远角（曼哈顿 ~24）：光已衰减到 0
+	if at(0, 96, 0) != 0 {
+		t.Fatalf("板下远角应全黑: %d", at(0, 96, 0))
+	}
+	// 洞正下方：15 直射
+	if at(8, 100, 8) != 15 {
+		t.Fatalf("洞下应直射: %d", at(8, 100, 8))
+	}
+	// 洞旁 1 格：14
+	if at(9, 100, 8) != 14 {
+		t.Fatalf("洞旁应 14: %d", at(9, 100, 8))
+	}
+	// 洞旁 5 格：衰减到 ≤10
+	if at(13, 100, 8) > 10 {
+		t.Fatalf("5 格外应大幅衰减: %d", at(13, 100, 8))
+	}
+}
