@@ -314,8 +314,33 @@ func (c *Chunk) writeLight(w *protocol.Writer) {
 		blockEmpty[sec] = true
 	}
 
+	blockLight := c.computeBlockLight()
+	blockData := make([]bool, NumSections)
+	blockArrays := make([][]byte, NumSections)
+	for sec := int32(0); sec < NumSections; sec++ {
+		allZero := true
+		arr := make([]byte, 2048)
+		for i := int32(0); i < 4096; i++ {
+			lv := blockLight[sec*4096+i]
+			if lv > 0 {
+				allZero = false
+				if i%2 == 0 {
+					arr[i/2] |= byte(lv)
+				} else {
+					arr[i/2] |= byte(lv) << 4
+				}
+			}
+		}
+		if allZero {
+			blockEmpty[sec] = true
+		} else {
+			blockData[sec] = true
+			blockArrays[sec] = arr
+		}
+	}
+
 	writeBitset(w, skyData)
-	w.VarInt(0) // 方块光数据掩码
+	writeBitset(w, blockData)
 	writeBitset(w, skyEmpty)
 	writeBitset(w, blockEmpty)
 	n := int32(0)
@@ -330,7 +355,18 @@ func (c *Chunk) writeLight(w *protocol.Writer) {
 			w.ByteArray(arrays[sec])
 		}
 	}
-	w.VarInt(0) // 方块光数组数量
+	bn := int32(0)
+	for _, has := range blockData {
+		if has {
+			bn++
+		}
+	}
+	w.VarInt(bn)
+	for sec := int32(0); sec < NumSections; sec++ {
+		if blockData[sec] {
+			w.ByteArray(blockArrays[sec])
+		}
+	}
 }
 
 // computeSkyLight 计算区块天光（0..15，索引 sec*4096 + y*256 + z*16 + x）。
@@ -427,4 +463,58 @@ func writeBitset(w *protocol.Writer, flags []bool) {
 		}
 		w.Int64(int64(L))
 	}
+}
+
+// blockLightSources 方块光源亮度（官方公开数值）。
+var blockLightSources = map[uint32]byte{
+	4926: 14, // torch
+	8686: 15, // glowstone
+	105:  15, // lava
+	89:   1,  // water（无光，占位防误配）
+}
+
+// computeBlockLight 计算方块光（BFS 从各光源扩散，每步 -1）。
+func (c *Chunk) computeBlockLight() []byte {
+	light := make([]byte, NumSections*4096)
+	type pos struct{ x, y, z int32 }
+	var queue []pos
+	for y := int32(0); y < WorldHeight; y++ {
+		for z := int32(0); z < 16; z++ {
+			for x := int32(0); x < 16; x++ {
+				if lv, ok := blockLightSources[c.GetBlock(x, y, z)]; ok && lv > 1 {
+					light[y/16*4096+(y%16)*256+z*16+x] = lv
+					queue = append(queue, pos{x, y, z})
+				}
+			}
+		}
+	}
+	for head := 0; head < len(queue); head++ {
+		p := queue[head]
+		lv := light[p.y/16*4096+(p.y%16)*256+p.z*16+p.x]
+		if lv <= 1 {
+			continue
+		}
+		for _, d := range [6][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}} {
+			nx, ny, nz := p.x+d[0], p.y+d[1], p.z+d[2]
+			if nx < 0 || nx > 15 || nz < 0 || nz > 15 || ny < 0 || ny >= WorldHeight {
+				continue
+			}
+			if isOpaque(c.GetBlock(nx, ny, nz)) {
+				continue
+			}
+			idx := ny/16*4096 + (ny%16)*256 + nz*16 + nx
+			if light[idx] < lv-1 {
+				light[idx] = lv - 1
+				if lv-1 > 1 {
+					queue = append(queue, pos{nx, ny, nz})
+				}
+			}
+		}
+	}
+	return light
+}
+
+// IsLightSource 报告方块状态是否发光。
+func IsLightSource(s uint32) bool {
+	return blockLightSources[s] > 1
 }

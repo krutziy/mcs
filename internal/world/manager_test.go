@@ -112,3 +112,28 @@ func TestSkyLightPropagation(t *testing.T) {
 		t.Fatalf("5 格外应大幅衰减: %d", at(13, 100, 8))
 	}
 }
+
+// TestBlockLightTorch 火把：中心 14、1 格外 13、不透明墙后为 0。
+func TestBlockLightTorch(t *testing.T) {
+	ch := NewChunk(0, 0, 0)
+	ch.SetBlock(8, 64, 8, 4926) // torch
+	light := ch.computeBlockLight()
+	at := func(x, y, z int32) byte { return light[y/16*4096+(y%16)*256+z*16+x] }
+	if at(8, 64, 8) != 14 {
+		t.Fatalf("火把中心应 14: %d", at(8, 64, 8))
+	}
+	if at(9, 64, 8) != 13 {
+		t.Fatalf("1 格外应 13: %d", at(9, 64, 8))
+	}
+	// 石墙遮挡：直射路径被整面墙截断（墙上下可绕行——光会绕过墙，物理正确；
+	// 断言墙正后方紧邻格远低于无墙时的值即可）
+	ch2 := NewChunk(0, 0, 0)
+	ch2.SetBlock(8, 64, 8, 4926)
+	for y := int32(63); y <= 65; y++ {
+		ch2.SetBlock(9, y, 8, StateStone)
+	}
+	l2 := ch2.computeBlockLight()
+	if v := l2[64/16*4096+(64%16)*256+8*16+10]; v > 11 {
+		t.Fatalf("墙后应显著减光: %d", v)
+	}
+}

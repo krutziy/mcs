@@ -186,12 +186,17 @@ func (g *Game) handleHeldSlot(ev *playerHeldSlotEvent) {
 	}
 }
 
-// applyBlock 应用一次方块变更并广播：写世界 → 广播增量更新 → 回 ack。
-// ack 必须晚于方块更新包到达客户端（客户端用 ack 提交预测状态）。
+// applyBlock 应用一次方块变更并广播：写世界 → 广播增量更新 → 光照重算
+// （含光源的变更重发整区块）→ 回 ack。
 func (g *Game) applyBlock(x, y, z int32, state uint32, sequence int32, actor *entity.Player) {
+	oldState := g.world.GetBlock(x, y, z)
 	g.world.SetBlock(x, y, z, state)
 	g.recordBlockChange(x, y, z, state)
 	g.flushBlockUpdates()
+	// 光源出现/消失时重发受影响区块（含新光照数组）
+	if world.IsLightSource(oldState) || world.IsLightSource(state) {
+		g.resendChunkWithLight(x >> 4, z >> 4)
+	}
 	if actor != nil && sequence > 0 {
 		actor.Send.SendPlay("minecraft:block_changed_ack", func(w *protocol.Writer) {
 			packet.WriteBlockChangedAck(w, sequence)
@@ -379,4 +384,20 @@ func abs32(v int32) int32 {
 		return -v
 	}
 	return v
+}
+
+// resendChunkWithLight 重发区块（带最新光照）给其观察者。
+func (g *Game) resendChunkWithLight(cx, cz int32) {
+	for _, p := range g.chunkViewers(cx, cz) {
+		sess := g.sessionOf(p)
+		if sess == nil {
+			continue
+		}
+		style := world.StyleFor(g.playerProto(p))
+		x, z := cx, cz
+		body := g.world.Chunk(x, z).EncodeBody(style)
+		p.Send.SendPlay("minecraft:level_chunk_with_light", func(w *protocol.Writer) {
+			packet.WriteLevelChunk(w, x, z, body)
+		})
+	}
 }
