@@ -428,3 +428,65 @@ func TestLeafDecay(t *testing.T) {
 		t.Fatal("原木旁叶子不应枯萎")
 	}
 }
+
+// TestWeatherRain 天气：强制下雨广播 game_event，计时归零转晴。
+func TestWeatherRain(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	g.setRaining(true)
+	if !g.raining {
+		t.Fatal("应进入雨天")
+	}
+	if fs.find("minecraft:game_event") == nil {
+		t.Fatal("应广播 game_event 开始下雨")
+	}
+	// 雨停
+	fs.sent = nil
+	g.rainTimer = 1
+	g.tick = 100
+	g.tickWeather()
+	g.tick += 100
+	g.tickWeather() // 计时归零 → 停雨
+	if g.raining {
+		t.Fatal("计时归零应停雨")
+	}
+	if fs.find("minecraft:game_event") == nil {
+		t.Fatal("应广播停止下雨")
+	}
+	_ = p
+}
+
+// TestBreedAnimals 动物繁殖：两头牛各喂麦 → 生成幼崽，进入繁殖冷却。
+func TestBreedAnimals(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	wheat := ids["wheat"]
+	p.Slots[36] = entity.Item{ID: wheat, Count: 3}
+	cow1 := g.spawnMob("cow", 8.5, -60, 8.5)
+	cow2 := g.spawnMob("cow", 9.5, -60, 8.5)
+
+	g.handleInteract(&playerInteractEvent{p: p, target: cow1.eid})
+	if g.breeds[cow1.eid] == nil || g.breeds[cow1.eid].loveCd <= 0 {
+		t.Fatal("喂食后应进入爱慕状态")
+	}
+	if fs.find("minecraft:level_event") == nil {
+		t.Fatal("应有爱心粒子")
+	}
+	if p.Slots[36].Count != 2 {
+		t.Fatal("应消耗 1 个小麦")
+	}
+	before := len(g.mobs)
+	g.handleInteract(&playerInteractEvent{p: p, target: cow2.eid})
+	if len(g.mobs) != before+1 {
+		t.Fatal("双亲爱慕应生成幼崽")
+	}
+	if g.breeds[cow1.eid].loveCd < 2000 {
+		t.Fatal("繁殖后应有长冷却")
+	}
+	// 爱慕中不可再喂
+	p.Slots[36] = entity.Item{ID: wheat, Count: 1}
+	cnt := len(g.mobs)
+	g.handleInteract(&playerInteractEvent{p: p, target: cow1.eid})
+	if len(g.mobs) != cnt || g.breeds[cow1.eid].loveCd < 2000 {
+		t.Fatal("冷却中喂食应无效")
+	}
+}

@@ -81,6 +81,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		orbs:          map[int32]*xpOrb{},
 		arrows:        map[int32]*arrow{},
 		creepers:      map[int32]*creeperFuse{},
+		breeds:        map[int32]*breedState{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}

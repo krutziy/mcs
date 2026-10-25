@@ -76,10 +76,13 @@ type Game struct {
 	fallings     map[int32]*fallingBlock   // 下落方块实体
 	waterQueue   [][3]int32                // 待流水位置
 	saplings     map[[3]int32]int32        // 树苗（位置 → 树龄）
+	raining      bool                     // 天气
+	rainTimer    int                      // 雨剩余决策周期
 	orbs         map[int32]*xpOrb          // 经验球实体
 	arrows       map[int32]*arrow         // 箭矢实体
 	creepers     map[int32]*creeperFuse   // 苦力怕引信
 	leafQueue    [][3]int32               // 待枯萎判定的叶子
+	breeds       map[int32]*breedState    // 动物繁殖状态
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
@@ -101,6 +104,14 @@ func New(cfg Config, suite *version.Suite) *Game {
 		crafting:       map[int32]*craftState{},
 		furnaces:       map[[3]int32]*furnaceState{},
 		openFurnace:    map[int32][3]int32{},
+		breeds:         map[int32]*breedState{},
+		chests:         map[[3]int32]*chestState{},
+		openChest:      map[int32][3]int32{},
+		orbs:           map[int32]*xpOrb{},
+		arrows:         map[int32]*arrow{},
+		creepers:       map[int32]*creeperFuse{},
+		fallings:       map[int32]*fallingBlock{},
+		saplings:       map[[3]int32]int32{},
 		dayTime:        6000, // 正午
 		clockID:        1,
 		itemBlocks:     map[int32]map[int32]uint32{},
@@ -180,6 +191,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 			}
 		}
 		g.loadFurnaces()
+	g.loadWeather()
 	g.loadChests()
 	g.loadInteractTables()
 	}
@@ -260,6 +272,8 @@ func (g *Game) tickNow() {
 	g.tickCreepers()
 	g.tickUndeadBurn()
 	g.tickLeafDecay()
+	g.tickWeather()
+	g.tickBreeds()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒
@@ -285,6 +299,7 @@ func (g *Game) saveAll() {
 	_ = os.WriteFile(filepath.Join(g.Cfg.SaveDir, "time.json"), mb, 0o644)
 	g.saveFurnaces()
 	g.saveChests()
+	g.saveWeather()
 	for _, p := range g.players {
 		g.savePlayer(p)
 	}
@@ -353,6 +368,8 @@ func (g *Game) handleEvent(e Event) {
 		g.handleUseItem(ev)
 	case *playerAttackEvent:
 		g.handleAttack(ev)
+	case *playerInteractEvent:
+		g.handleInteract(ev)
 	case *playerCloseCraftEvent:
 		if ev.p != nil {
 			g.closeCrafting(ev.p)
@@ -505,6 +522,13 @@ func (g *Game) handleJoin(s *Session) {
 	g.syncInventory(p) // 初始物品栏同步
 	g.syncHealth(p)    // 初始生命/食物同步
 	g.syncExperience(p)
+	if g.raining {
+		e := gameEventStartRain
+		p.Send.SendPlay("minecraft:game_event", func(w *protocol.Writer) {
+			w.Int8(e)
+			w.Float(0)
+		})
+	}
 
 	// 视距内已有的生物补给新玩家
 	for _, m := range g.mobs {

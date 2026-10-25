@@ -126,6 +126,12 @@ type playerAttackEvent struct {
 	target int32
 }
 
+type playerInteractEvent struct {
+	p        *entity.Player
+	target   int32
+	sneaking bool
+}
+
 // PlayLoop 阻塞处理 play 状态的入站包，直到连接断开。在独立 goroutine 中运行。
 func (s *Session) PlayLoop() {
 	s.game.JoinSession(s)
@@ -209,6 +215,13 @@ func (s *Session) PlayLoop() {
 			}
 		case "minecraft:attack":
 			s.game.Submit(&playerAttackEvent{p: p, target: pr.VarInt()})
+		case "minecraft:interact":
+			target := pr.VarInt()
+			typ := pr.VarInt()
+			sneaking := pr.Bool()
+			if typ == 0 { // interact：喂食判定
+				s.game.Submit(&playerInteractEvent{p: p, target: target, sneaking: sneaking})
+			}
 		case "minecraft:client_tick_end", "minecraft:player_loaded", "minecraft:punch",
 			"minecraft:move_vehicle", "minecraft:player_input":
 			// 活体心跳/输入流：无需处理
