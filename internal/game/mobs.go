@@ -203,7 +203,7 @@ func (g *Game) handleAttack(ev *playerAttackEvent) {
 	if p == nil || p.Dead {
 		return
 	}
-	dmg := g.attackDamage(p)
+	dmg := g.attackDamage(p) + g.enchantAttackBonus(p)
 	// 打生物
 	if m, ok := g.mobs[ev.target]; ok {
 		if dist2(p.X, p.Y, p.Z, m.x, m.y, m.z) > 36 {
@@ -262,7 +262,7 @@ func (g *Game) killMob(m *mob, by *entity.Player) {
 	g.Bus.emit(MobKilled{Player: by, Kind: m.kind.name})
 }
 
-// attackDamage 按手持物品计算攻击力（公开数值：剑 4-8，工具 2-5，空手 1）。
+// attackDamage 按手持物品计算攻击力（公开数值 + 附魔加成）。
 func (g *Game) attackDamage(p *entity.Player) float32 {
 	name := g.itemNameOf(p, p.Held().ID)
 	if name == "" {

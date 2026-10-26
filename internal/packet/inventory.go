@@ -14,6 +14,13 @@ type ItemSlot struct {
 	Count  int32
 	Damage int32  // 已损失耐久（>0 时输出 damage 组件，组件 ID 3）
 	Potion string // 药水短名（非空时输出 potion_contents 组件，组件 ID 26）
+	EnchList []EnchPair // 附魔列表（非空时输出 enchantments 组件，组件 ID 23）
+}
+
+// EnchPair 一条附魔（名称 + 等级）。
+type EnchPair struct {
+	Name  string
+	Level int32
 }
 
 // WriteEmptySlot 写入空 Slot 字段。
@@ -178,4 +185,40 @@ func WriteContainerSetContentPotion(w *protocol.Writer, window, state int32, slo
 	} else {
 		WriteSlotDamage(w, carried.ID, carried.Count, carried.Damage)
 	}
+}
+
+// WriteContainerSetContentEnch 同 ContainerSetContent 但槽 0 可带附魔组件。
+func WriteContainerSetContentEnch(w *protocol.Writer, window, state int32, slots []ItemSlot, carried ItemSlot) {
+	w.VarInt(window)
+	w.VarInt(state)
+	w.VarInt(int32(len(slots)))
+	for _, s := range slots {
+		if s.ID == 0 {
+			WriteEmptySlot(w)
+		} else if len(s.EnchList) > 0 {
+			WriteSlotEnch(w, s.ID, s.Count, s.EnchList)
+		} else {
+			WriteSlotDamage(w, s.ID, s.Count, s.Damage)
+		}
+	}
+	if carried.ID == 0 {
+		WriteEmptySlot(w)
+	} else {
+		WriteSlotDamage(w, carried.ID, carried.Count, carried.Damage)
+	}
+}
+
+// WriteSlotEnch 带 enchantments 组件（组件 ID 23，NBT {id:level}）的 Slot。
+func WriteSlotEnch(w *protocol.Writer, itemID, count int32, list []EnchPair) {
+	w.Bool(true)
+	w.VarInt(itemID)
+	w.VarInt(count)
+	w.VarInt(1) // 增补组件数
+	w.VarInt(23)
+	c := protocol.Compound{}
+	for _, e := range list {
+		c["minecraft:"+e.Name] = e.Level
+	}
+	protocol.WriteNBT(w, c)
+	w.VarInt(0)
 }

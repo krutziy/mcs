@@ -125,6 +125,15 @@ type playerCloseBrewEvent struct {
 	p *entity.Player
 }
 
+type playerCloseEnchEvent struct {
+	p *entity.Player
+}
+
+type playerEnchantEvent struct {
+	p    *entity.Player
+	tier int32
+}
+
 type playerAttackEvent struct {
 	p      *entity.Player
 	target int32
@@ -218,9 +227,13 @@ func (s *Session) PlayLoop() {
 				s.game.Submit(&playerCloseChestEvent{p: p})
 			case 4:
 				s.game.Submit(&playerCloseBrewEvent{p: p})
+			case 5:
+				s.game.Submit(&playerCloseEnchEvent{p: p})
 			}
 		case "minecraft:attack":
 			s.game.Submit(&playerAttackEvent{p: p, target: pr.VarInt()})
+		case "minecraft:click_enchant":
+			s.game.Submit(&playerEnchantEvent{p: p, tier: pr.VarInt()})
 		case "minecraft:interact":
 			target := pr.VarInt()
 			typ := pr.VarInt()

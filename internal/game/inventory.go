@@ -118,6 +118,38 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 		g.syncBrewing(p, pos)
 		return
 	}
+	// 附魔台窗口 5：独立路由
+	if ev.click.Window == 5 {
+		if !g.enchOpen[p.EntityID] {
+			return
+		}
+		slot := int32(ev.click.Slot)
+		if ev.click.Mode == packet.ClickModeClick {
+			var ref *entity.Item
+			switch {
+			case slot == 0:
+				ref = &p.EnchSlots[0]
+			case slot == 1:
+				ref = &p.EnchSlots[1]
+			case slot >= 2 && slot <= 28:
+				ref = &p.Slots[9+(slot-2)]
+			case slot >= 29 && slot <= 37:
+				ref = &p.Slots[36+(slot-29)]
+			}
+			if ref != nil {
+				if slot == 0 { // 物品进出附魔槽：清空已有附魔记录
+					p.EnchItem = nil
+				}
+				if ev.click.Button == 0 {
+					leftClickSlotRef(p, ref)
+				} else if ev.click.Button == 1 {
+					rightClickSlotRef(p, ref)
+				}
+			}
+		}
+		g.syncEnchant(p)
+		return
+	}
 	// 熔炉窗口 2：独立路由
 	if ev.click.Window == 2 {
 		pos, ok := g.openFurnace[p.EntityID]

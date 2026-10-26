@@ -336,3 +336,32 @@ func Brewing(proto int32) map[[2]string]string {
 	}
 	return m
 }
+
+// EnchantInfo 单条附魔。
+type EnchantInfo struct {
+	MaxLevel int32
+	Weight   int32
+	Items    string // 逗号分隔的适用标签/物品
+}
+
+// Enchants 返回附魔表（名称 → 信息，777 基准）。
+func Enchants(proto int32) map[string]EnchantInfo {
+	b, err := files.ReadFile(fmt.Sprintf("data/enchants_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[string]EnchantInfo{}
+	for _, line := range strings.Split(string(b), "\n") {
+		parts := strings.SplitN(line, " ", 4)
+		if len(parts) != 4 {
+			continue
+		}
+		ml, e1 := strconv.Atoi(parts[1])
+		w, e2 := strconv.Atoi(parts[2])
+		if e1 != nil || e2 != nil {
+			continue
+		}
+		m[parts[0]] = EnchantInfo{MaxLevel: int32(ml), Weight: int32(w), Items: parts[3]}
+	}
+	return m
+}

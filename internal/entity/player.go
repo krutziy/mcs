@@ -43,6 +43,10 @@ type Player struct {
 	Level     int32
 	XPPending int32
 
+	// 附魔台会话状态
+	EnchSlots [2]Item // 0 物品 1 青金石
+	EnchItem  []EnchEntry
+
 	// 药水效果（效果名 → 剩余刻）与药水名记账
 	Effects   map[string]int32
 	EffectAmp map[string]int32
@@ -83,4 +87,10 @@ type Sender interface {
 	SendRawPlay(packetName string, body []byte) error
 	// DisconnectReason 断开原因（日志用）。
 	Addr() string
+}
+
+// EnchEntry 玩家物品上的一条附魔。
+type EnchEntry struct {
+	Name  string
+	Level int32
 }

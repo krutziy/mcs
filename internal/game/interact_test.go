@@ -639,3 +639,55 @@ func TestBrewingAndDrink(t *testing.T) {
 		t.Fatal("效果应到期")
 	}
 }
+
+// TestEnchantTable 附魔台：放剑+青金石+等级 → 附魔生效与消耗。
+func TestEnchantTable(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	g.enchants = assets.Enchants(777)
+	if len(g.enchants) < 30 {
+		t.Fatal("附魔表资产缺失")
+	}
+	// itemtags 里应有 enchantable 标签（genench 用的标签名）
+	g.itemTags = assets.ItemTags(777)
+
+	g.world.SetBlock(8, -61, 8, enchTableState)
+	if !g.tryOpenEnchantTable(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1}) {
+		t.Fatal("右键附魔台应打开")
+	}
+	if fs.find("minecraft:open_screen") == nil {
+		t.Fatal("应发 open_screen")
+	}
+
+	// 放铁剑 + 青金石 + 等级
+	p.EnchSlots[0] = entity.Item{ID: ids["iron_sword"], Count: 1}
+	p.EnchSlots[1] = entity.Item{ID: itemLapis, Count: 3}
+	p.Level = 5
+	g.applyEnchant(p, 1)
+	if len(p.EnchItem) == 0 {
+		t.Fatal("一档应至少附上 1 条")
+	}
+	if p.Level != 4 {
+		t.Fatalf("应消耗 1 级: %d", p.Level)
+	}
+	if p.EnchSlots[1].Count != 2 {
+		t.Fatal("应消耗 1 青金石")
+	}
+	// 附魔应为剑类适用项
+	for _, e := range p.EnchItem {
+		info, ok := g.enchants[e.Name]
+		if !ok || e.Level < 1 || e.Level > info.MaxLevel {
+			t.Fatalf("附魔非法: %+v", e)
+		}
+	}
+	// 锋利加成路径
+	p.EnchItem = append(p.EnchItem, entity.EnchEntry{Name: "sharpness", Level: 5})
+	if b := g.enchantAttackBonus(p); b < 3 {
+		t.Fatalf("锋利 V 加成应 ≥3: %.1f", b)
+	}
+	// 关闭退回
+	g.closeEnchantTable(p)
+	if p.EnchSlots[0].ID != 0 || p.Slots[36].ID != ids["iron_sword"] {
+		t.Fatal("关闭应退回物品")
+	}
+}

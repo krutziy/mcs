@@ -235,13 +235,13 @@ func (g *Game) removeOrb(eid int32) {
 	}
 }
 
-// armorAbsorb 伤害经盔甲减免（每点护甲 -4%，最多 80%）。
+// armorAbsorb 伤害经盔甲减免（每点护甲 -4%，最多 80%）+ 保护类附魔。
 func (g *Game) armorAbsorb(p *entity.Player, amount float32) float32 {
 	pts := g.totalArmor(p)
 	if pts <= 0 {
-		return amount
+		return amount * (1 - g.enchantArmorBonus(p))
 	}
-	return amount * (1 - float32(pts)*0.04)
+	return amount * (1 - float32(pts)*0.04) * (1 - g.enchantArmorBonus(p))
 }
 
 // broadcastEquipment 向其他人广播玩家装备（手持 + 盔甲）。

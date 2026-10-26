@@ -87,6 +87,8 @@ type Game struct {
 	brews        map[[3]int32]*brewingState // 酿造台（位置 → 状态）
 	openBrew     map[int32][3]int32        // 打开中的酿造台
 	brewing      map[[2]string]string      // 酿造表（输入药水+材料 → 产物）
+	enchOpen     map[int32]bool           // 打开附魔台的玩家
+	enchants     map[string]assets.EnchantInfo // 附魔表
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
@@ -112,6 +114,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		crops:          map[[3]int32]int32{},
 		brews:         map[[3]int32]*brewingState{},
 		openBrew:      map[int32][3]int32{},
+		enchOpen:     map[int32]bool{},
 		chests:         map[[3]int32]*chestState{},
 		openChest:      map[int32][3]int32{},
 		orbs:           map[int32]*xpOrb{},
@@ -162,6 +165,9 @@ func New(cfg Config, suite *version.Suite) *Game {
 		}
 		if tg := assets.ItemTags(p); len(tg) > 0 {
 			g.itemTags = tg
+		}
+		if ec := assets.Enchants(p); len(ec) > 0 {
+			g.enchants = ec
 		}
 		if bw := assets.Brewing(p); len(bw) > 0 {
 			g.brewing = bw
@@ -401,6 +407,14 @@ func (g *Game) handleEvent(e Event) {
 		if ev.p != nil {
 			g.closeBrewing(ev.p)
 		}
+	case *playerCloseEnchEvent:
+		if ev.p != nil {
+			g.closeEnchantTable(ev.p)
+		}
+	case *playerEnchantEvent:
+		if ev.p != nil {
+			g.applyEnchant(ev.p, ev.tier)
+		}
 	}
 	g.flushBlockUpdates()
 }
@@ -634,6 +648,9 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 	}
 	if _, ok := g.openBrew[p.EntityID]; ok {
 		g.closeBrewing(p)
+	}
+	if g.enchOpen[p.EntityID] {
+		g.closeEnchantTable(p)
 	}
 	delete(g.players, p.EntityID)
 	g.count.Store(int32(len(g.players)))
