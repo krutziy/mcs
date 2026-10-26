@@ -296,6 +296,7 @@ func (g *Game) tickNow() {
 	g.tickBrewings()
 	g.tickEffects()
 	g.tickRedstone()
+	g.tickPistons()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒

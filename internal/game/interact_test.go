@@ -779,3 +779,74 @@ func TestRedstoneTorchInvert(t *testing.T) {
 		t.Fatal("被充能的火把应熄灭")
 	}
 }
+
+// TestPistonExtendRetract 活塞：通电推出头并推方块，断电收回。
+func TestPistonExtendRetract(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	// 布局：拉杆(0,-61,0) 活塞(1,-61,0 朝north=-z) 石头(1,-61,-1) 空气(1,-61,-2)
+	g.world.SetBlock(0, -61, 0, leverOff)
+	g.world.SetBlock(1, -61, 0, pistonRet["north"])
+	g.world.SetBlock(1, -61, -1, world.StateStone)
+
+	g.toggleLever(p, packet.UseItemOn{X: 0, Y: -61, Z: 0, Face: 1, Sequence: 1})
+	g.rsDirty = true
+	g.tick = 2
+	g.tickRedstone()
+	g.tickPistons()
+	// 伸出：本体变 extended，头在 (1,-61,-1)，石头被推到 (1,-61,-2)
+	if got := g.world.GetBlock(1, -61, 0); got != pistonExt["north"] {
+		t.Fatalf("活塞应伸出: %d", got)
+	}
+	if got := g.world.GetBlock(1, -61, -1); got != pistonHeadN {
+		t.Fatalf("头应出现: %d", got)
+	}
+	if got := g.world.GetBlock(1, -61, -2); got != world.StateStone {
+		t.Fatalf("石头应被推: %d", got)
+	}
+
+	g.toggleLever(p, packet.UseItemOn{X: 0, Y: -61, Z: 0, Face: 1, Sequence: 2})
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	g.rsDirty = true
+	g.tick += 2
+	g.tickPistons()
+	if got := g.world.GetBlock(1, -61, 0); got != pistonRet["north"] {
+		t.Fatalf("活塞应收回: %d", got)
+	}
+	if got := g.world.GetBlock(1, -61, -1); got != world.StateAir {
+		t.Fatalf("头应消失: %d", got)
+	}
+}
+
+// TestStickyPistonPull 粘活塞收回拉回方块。
+func TestStickyPistonPull(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	g.world.SetBlock(0, -61, 0, leverOff)
+	g.world.SetBlock(1, -61, 0, stickyRet["north"])
+	g.world.SetBlock(1, -61, -1, world.StateDirt) // 泥土直接贴活塞面
+
+	// 先伸出：泥土被推到 -2、头占 -1
+	g.toggleLever(p, packet.UseItemOn{X: 0, Y: -61, Z: 0, Face: 1, Sequence: 1})
+	g.rsDirty = true
+	g.tick = 2
+	g.tickRedstone()
+	g.tickPistons()
+	if g.world.GetBlock(1, -61, -2) != world.StateDirt {
+		t.Fatalf("泥土应被推到 -2: %d", g.world.GetBlock(1, -61, -2))
+	}
+	// 收回：粘性把泥土从 -2 拉回 -1
+	g.toggleLever(p, packet.UseItemOn{X: 0, Y: -61, Z: 0, Face: 1, Sequence: 2})
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	g.rsDirty = true
+	g.tick += 2
+	g.tickPistons()
+	if got := g.world.GetBlock(1, -61, -1); got != world.StateDirt {
+		t.Fatalf("粘活塞应拉回泥土到 -1: %d", got)
+	}
+	if got := g.world.GetBlock(1, -61, -2); got != world.StateAir {
+		t.Fatal("原位应清空")
+	}
+}

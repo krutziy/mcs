@@ -287,3 +287,139 @@ func isRedstoneComponent(s uint32) bool {
 		s == leverOn || s == leverOff || s == lampOn || s == lampOff ||
 		s == repeaterOn || s == repeaterOff
 }
+
+// ---- 活塞 / 观察者 / 比较器 ----
+
+// 活塞 north 朝向状态族（其他朝向按 facing 差值推导：states 表按
+// north/south/west/east 分组排列——扩展组在前。由 blocks.json 生成时
+// 每组 6 状态（extended × 3 微变体），这里取各族首值经查表封装）。
+var (
+	pistonExt   = map[string]uint32{} // facing → extended=true
+	pistonRet   = map[string]uint32{} // facing → extended=false
+	stickyExt   = map[string]uint32{}
+	stickyRet   = map[string]uint32{}
+	pistonHeadN uint32 = 2387 // north short=false（普通头）
+)
+
+func init() {
+	// 由 blocks.json 的排列规律：north 组已确认（2373/2379 普通、2350/2356 粘）。
+	// 其余朝向通过每朝向 6 状态（3 微变体 × extended）步进推导：
+	// piston 全 12 状态 = 每 facing 6 个（extended true 3 + false 3）。
+	// 直接硬编码已验证的族首（生成资产缺失时的保守映射——全部朝向用 north 视觉）。
+	for _, f := range []string{"north", "south", "west", "east"} {
+		pistonExt[f], pistonRet[f] = 2373, 2379
+		stickyExt[f], stickyRet[f] = 2350, 2356
+	}
+}
+
+// pistonBlocksOf 活塞/粘活塞（任意朝向）→ (是否粘性, facing)。
+// 我们只写 north 族状态 → 简化判等集合。
+var pistonStates = map[uint32]bool{2373: true, 2379: true, 2350: true, 2356: true}
+var stickyStates = map[uint32]bool{2350: true, 2356: true}
+
+// actPistons 红石重算后驱动活塞：邻通电伸出（推 1 方块），断电收回。
+func (g *Game) actPistons() {
+	type ppos struct {
+		x, y, z int32
+		sticky  bool
+	}
+	var pistons []ppos
+	g.world.EachChunk(func(cx, cz int32, ch *world.Chunk) {
+		for i := int32(0); i < world.NumSections; i++ {
+			sec := ch.Section(i)
+			if sec == nil {
+				continue
+			}
+			for idx := int32(0); idx < world.SectionVol; idx++ {
+				s := sec.Blocks[idx]
+				if !pistonStates[s] {
+					continue
+				}
+				y := i*16 + idx>>8
+				z := (idx>>4)&15
+				x := idx & 15
+				pistons = append(pistons, ppos{cx*16 + x, y + world.MinY, cz*16 + z, stickyStates[s]})
+			}
+		}
+	})
+	for _, pi := range pistons {
+		powered := g.posPowered(pi.x, pi.y, pi.z)
+		cur := g.world.GetBlock(pi.x, pi.y, pi.z)
+		extended := cur == pistonExt["north"] || cur == stickyExt["north"]
+		want := pistonRet["north"]
+		if pi.sticky {
+			want = stickyRet["north"]
+		}
+		if powered && !extended {
+			// 伸出：推前方方块 1 格（前方的前方须为空气）
+			fx, fy, fz := pi.x, pi.y, pi.z-1 // north 朝向 = -z
+			front := g.world.GetBlock(fx, fy, fz)
+			front2 := g.world.GetBlock(fx, fy, fz-1)
+			if front == world.StateAir {
+				// 直接伸（头出现在 front）
+				g.setRS(fx, fy, fz, pistonHeadN)
+			} else if front2 == world.StateAir && front != world.StateBedrock &&
+				front != lampOn && front != lampOff { // 简单推动（不推红石设备）
+				g.setRS(fx, fy, fz-1, front)
+				g.setRS(fx, fy, fz, pistonHeadN)
+			} else {
+				continue // 推不动：不伸
+			}
+			ext := pistonExt["north"]
+			if pi.sticky {
+				ext = stickyExt["north"]
+			}
+			g.setRS(pi.x, pi.y, pi.z, ext)
+			g.rsDirty = true
+		} else if !powered && extended {
+			// 收回：头消失；粘性把前方拉回
+			fx, fy, fz := pi.x, pi.y, pi.z-1
+			if g.world.GetBlock(fx, fy, fz) == pistonHeadN {
+				g.setRS(fx, fy, fz, world.StateAir)
+				if pi.sticky {
+					back := g.world.GetBlock(fx, fy, fz-1)
+					if back != world.StateAir && back != world.StateBedrock {
+						g.setRS(fx, fy, fz, back)
+						g.setRS(fx, fy, fz-1, world.StateAir)
+					}
+				}
+			}
+			g.setRS(pi.x, pi.y, pi.z, want)
+			g.rsDirty = true
+		}
+	}
+}
+
+// posPowered 位置邻接通电（线 power>0 / 点亮中继器 / 源）。
+func (g *Game) posPowered(x, y, z int32) bool {
+	for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}} {
+		s := g.world.GetBlock(x+d[0], y+d[1], z+d[2])
+		if s == rsBlock || s == leverOn || s == torchLit {
+			return true
+		}
+		if s == repeaterOn {
+			return true
+		}
+		if rsIsWire(s) && rsWirePower(s) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// setRS 红石变更专用写（记录 + 不 ack）。
+func (g *Game) setRS(x, y, z int32, state uint32) {
+	if g.world.GetBlock(x, y, z) == state {
+		return
+	}
+	g.world.SetBlock(x, y, z, state)
+	g.recordBlockChange(x, y, z, state)
+}
+
+// tickPistons 每次红石重算后驱动活塞。
+func (g *Game) tickPistons() {
+	if g.tick%2 != 0 {
+		return
+	}
+	g.actPistons()
+}
