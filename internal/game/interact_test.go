@@ -691,3 +691,91 @@ func TestEnchantTable(t *testing.T) {
 		t.Fatal("关闭应退回物品")
 	}
 }
+
+// TestRedstoneLeverLamp 拉杆 → 灯：开拉杆灯亮、关灯灭。
+func TestRedstoneLeverLamp(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	// 地板 + 拉杆 + 灯（相邻）
+	g.world.SetBlock(8, -62, 8, world.StateStone)
+	g.world.SetBlock(8, -61, 8, leverOff)
+	g.world.SetBlock(9, -61, 8, lampOff)
+
+	g.toggleLever(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1, Sequence: 1})
+	g.rsDirty = true
+	g.tick = 2
+	g.tickRedstone()
+	if got := g.world.GetBlock(9, -61, 8); got != lampOn {
+		t.Fatalf("拉杆开灯应亮: %d", got)
+	}
+	if fs.find("minecraft:block_update") == nil && fs.find("minecraft:section_blocks_update") == nil {
+		t.Fatal("应广播灯变更")
+	}
+
+	g.toggleLever(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1, Sequence: 2})
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	if got := g.world.GetBlock(9, -61, 8); got != lampOff {
+		t.Fatalf("拉杆关灯应灭: %d", got)
+	}
+}
+
+// TestRedstoneWireDecay 线衰减：火把 15 → 5 格线 → 末端灯。
+func TestRedstoneWireDecay(t *testing.T) {
+	g, _, _ := newInteractGame(t)
+	// 火把(源) + 5 格线 + 灯
+	g.world.SetBlock(0, -61, 0, torchLit)
+	for i := int32(1); i <= 5; i++ {
+		g.world.SetBlock(i, -61, 0, wireBase[0])
+	}
+	g.world.SetBlock(6, -61, 0, lampOff)
+
+	g.rsDirty = true
+	g.tick = 2
+	g.tickRedstone()
+	// 线 1 应为 15、线 5 应为 11
+	if got := rsWirePower(g.world.GetBlock(1, -61, 0)); got != 15 {
+		t.Fatalf("线 1 应 power15: %d", got)
+	}
+	if got := rsWirePower(g.world.GetBlock(5, -61, 0)); got != 11 {
+		t.Fatalf("线 5 应 power11: %d", got)
+	}
+	if g.world.GetBlock(6, -61, 0) != lampOn {
+		t.Fatal("末端灯应亮")
+	}
+	// 拉远：15 格线后灯不亮（衰减到 0）
+	for i := int32(7); i <= 20; i++ {
+		g.world.SetBlock(i, -61, 0, wireBase[0])
+	}
+	g.world.SetBlock(21, -61, 0, lampOn)
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	if g.world.GetBlock(21, -61, 0) != lampOff {
+		t.Fatal("15 格外灯应不亮")
+	}
+}
+
+// TestRedstoneTorchInvert 火把反相：火把下被充能 → 熄灭。
+func TestRedstoneTorchInvert(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	// 布局：拉杆 → 线 →（线爬上石头侧面经顶面）火把站在被充能的石头上。
+	// 简化模型：火把下方直接是线（实现按"下方被充能则熄灭"）。
+	g.world.SetBlock(0, -61, 0, leverOff)
+	g.world.SetBlock(1, -62, 0, wireBase[0]) // 火把下方这条线
+	g.world.SetBlock(1, -61, 0, torchLit)
+
+	g.rsDirty = true
+	g.tick = 2
+	g.tickRedstone()
+	if g.world.GetBlock(1, -61, 0) != torchLit {
+		t.Fatal("未充能火把应保持亮")
+	}
+	g.toggleLever(p, packet.UseItemOn{X: 0, Y: -61, Z: 0, Face: 1, Sequence: 1})
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	if g.world.GetBlock(1, -61, 0) != torchUnlit {
+		t.Fatal("被充能的火把应熄灭")
+	}
+}

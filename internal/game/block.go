@@ -69,6 +69,7 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	g.triggerGravity(a.X, a.Y+1, a.Z) // 上方重力方块塌落
 	g.scheduleWaterFlow(a.X, a.Y, a.Z) // 邻水流入
 	g.scheduleLeafCheck(a.X, a.Y, a.Z) // 周围叶子重算枯萎
+	g.scheduleRedstoneUpdate(a.X, a.Y, a.Z)
 	// 生存模式：按掉落表生成掉落物（需镐方块还要材质门槛）
 	if !g.isCreative(p) {
 		bus.Drops = g.digDrops(p, old)
@@ -114,6 +115,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		g.tryTill(p, u) || g.tryPlantSeed(p, u) || g.tryBonemeal(p, u) ||
 		g.tryOpenBrewing(p, u) ||
 		g.tryOpenEnchantTable(p, u) ||
+		g.toggleLever(p, u) ||
 		g.trySleepBed(p, u) || g.toggleDoor(p, u) {
 		return
 	}
@@ -157,6 +159,8 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	}
 	g.applyBlock(tx, ty, tz, state, u.Sequence, p)
 	bus.State, bus.ItemID = state, held.ID
+	g.scheduleRedstoneUpdate(tx, ty, tz)
+	g.rsDirty = g.rsDirty || isRedstoneComponent(state)
 	if state == world.StateSand || state == world.StateGravel {
 		g.triggerGravity(tx, ty, tz) // 放在悬空处 → 落下
 	} else {

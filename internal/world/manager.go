@@ -204,3 +204,18 @@ func readChunkFile(path string) (*Chunk, error) {
 
 // DirtyCount 返回未保存的脏区块数（监控/测试用）。
 func (m *Manager) DirtyCount() int { return len(m.dirty) }
+
+// EachChunk 迭代全部已生成区块（只读遍历，主循环内使用）。
+func (m *Manager) EachChunk(f func(cx, cz int32, ch *Chunk)) {
+	for key, ch := range m.chunks {
+		f(key[0], key[1], ch)
+	}
+}
+
+// Section 返回区块内指定节（越界返回 nil）。
+func (c *Chunk) Section(i int32) *Section {
+	if i < 0 || i >= NumSections {
+		return nil
+	}
+	return c.sections[i]
+}

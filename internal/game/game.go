@@ -89,6 +89,7 @@ type Game struct {
 	brewing      map[[2]string]string      // 酿造表（输入药水+材料 → 产物）
 	enchOpen     map[int32]bool           // 打开附魔台的玩家
 	enchants     map[string]assets.EnchantInfo // 附魔表
+	rsDirty      bool                     // 红石网络待重算
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
@@ -294,6 +295,7 @@ func (g *Game) tickNow() {
 	g.tickCrops()
 	g.tickBrewings()
 	g.tickEffects()
+	g.tickRedstone()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒
