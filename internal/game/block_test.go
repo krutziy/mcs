@@ -86,6 +86,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		brews:         map[[3]int32]*brewingState{},
 		openBrew:      map[int32][3]int32{},
 		enchOpen:     map[int32]bool{},
+		anvils:       map[int32]*anvilSession{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
 	}

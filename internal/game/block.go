@@ -118,6 +118,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		g.tryOpenEnchantTable(p, u) ||
 		g.toggleLever(p, u) ||
 		g.toggleComparator(p, u) ||
+		g.tryOpenAnvil(p, u) ||
 		g.trySleepBed(p, u) || g.toggleDoor(p, u) {
 		return
 	}

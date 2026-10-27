@@ -439,13 +439,13 @@ func TestWeatherRain(t *testing.T) {
 	if fs.find("minecraft:game_event") == nil {
 		t.Fatal("应广播 game_event 开始下雨")
 	}
-	// 雨停
+	// 雨停（tickWeather 的随机转雨用 tick%100==0 分支，rainTimer>0 时只递减不转雨）
 	fs.sent = nil
 	g.rainTimer = 1
 	g.tick = 100
-	g.tickWeather()
-	g.tick += 100
-	g.tickWeather() // 计时归零 → 停雨
+	g.tickWeather() // timer 1→0，仍是 %100==0 的分支但不转雨（raining=true 跳过）
+	g.tick += 99
+	g.tickWeather() // 199 不是 100 倍数：只走 timer 分支 → 停雨
 	if g.raining {
 		t.Fatal("计时归零应停雨")
 	}
@@ -929,4 +929,95 @@ func TestObserverPulse(t *testing.T) {
 		t.Fatal("脉冲到期应熄灭")
 	}
 	_ = p
+}
+
+// TestAnvilRepairAndMerge 铁砧：同工具合并修复耐久、附魔合并取高。
+func TestAnvilRepairAndMerge(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	g.enchants = assets.Enchants(777)
+	ids := assets.ItemIDs(777)
+	g.world.SetBlock(8, -61, 8, anvilState)
+	if !g.tryOpenAnvil(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1}) {
+		t.Fatal("右键铁砧应打开")
+	}
+	if fs.find("minecraft:open_screen") == nil {
+		t.Fatal("应发 open_screen")
+	}
+	as := g.anvils[p.EntityID]
+
+	// 两把半损铁剑合并
+	as.in0 = entity.Item{ID: ids["iron_sword"], Count: 1, Damage: 125}
+	as.in1 = entity.Item{ID: ids["iron_sword"], Count: 1, Damage: 125}
+	p.Level = 5
+	if !g.takeAnvilResult(p) {
+		t.Fatal("应可取修复结果")
+	}
+	if p.Cursor.ID != ids["iron_sword"] {
+		t.Fatal("结果应为铁剑")
+	}
+	// 两把各剩 125 耐久 → 合并 250 满 → Damage=0
+	if p.Cursor.Damage != 0 {
+		t.Fatalf("合并后应满耐久: %d", p.Cursor.Damage)
+	}
+	if p.Level != 2 {
+		t.Fatalf("合并应扣 3 级: %d", p.Level)
+	}
+	if as.in0.ID != 0 || as.in1.ID != 0 {
+		t.Fatal("双输入应清空")
+	}
+
+	// 附魔合并：锋利 III + 锋利 III → 锋利 IV（同级+1）
+	p.Level = 10
+	p.Cursor = entity.Item{}
+	as.in0 = entity.Item{ID: ids["iron_sword"], Count: 1}
+	as.in1 = entity.Item{ID: ids["iron_sword"], Count: 1}
+	as.ench0 = []entity.EnchEntry{{Name: "sharpness", Level: 3}}
+	as.ench1 = []entity.EnchEntry{{Name: "sharpness", Level: 3}}
+	if !g.takeAnvilResult(p) {
+		t.Fatal("应可取合并结果")
+	}
+	found := false
+	for _, e := range p.EnchItem {
+		if e.Name == "sharpness" && e.Level == 4 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("锋利 III+III 应得 IV: %+v", p.EnchItem)
+	}
+
+	// 材料修复：钻石镐 + 钻石
+	p.Cursor = entity.Item{}
+	as.in0 = entity.Item{ID: ids["diamond_pickaxe"], Count: 1, Damage: 800}
+	as.in1 = entity.Item{ID: ids["diamond"], Count: 1}
+	res := g.anvilResult(as)
+	if res.ID != ids["diamond_pickaxe"] || res.Damage != 800-390 {
+		t.Fatalf("钻石修复应回 1/4 耐久: %+v", res)
+	}
+
+	g.closeAnvil(p)
+	if p.EnchItem == nil {
+		t.Fatal("关闭前光标/记录状态正常")
+	}
+}
+
+// TestAnvilMaterialRepairTake 取材料修复结果并扣经验。
+func TestAnvilMaterialRepairTake(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	g.world.SetBlock(8, -61, 8, anvilState)
+	g.tryOpenAnvil(p, packet.UseItemOn{X: 8, Y: -61, Z: 8, Face: 1})
+	as := g.anvils[p.EntityID]
+	as.in0 = entity.Item{ID: ids["iron_sword"], Count: 1, Damage: 200}
+	as.in1 = entity.Item{ID: ids["iron_ingot"], Count: 1}
+	p.Level = 1
+	if !g.takeAnvilResult(p) {
+		t.Fatal("材料修复应可取")
+	}
+	if p.Cursor.Damage != 200-62 { // 250/4=62.5 → 62
+		t.Fatalf("铁锭修复应回 62 耐久: %d", p.Cursor.Damage)
+	}
+	if p.Level != 0 {
+		t.Fatal("材料修复应扣 1 级")
+	}
 }

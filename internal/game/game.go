@@ -91,6 +91,7 @@ type Game struct {
 	enchants     map[string]assets.EnchantInfo // 附魔表
 	rsDirty      bool                     // 红石网络待重算
 	observerPulse [][4]int32                // 观察者脉冲（位置+到期刻）
+	anvils       map[int32]*anvilSession  // 打开中的铁砧
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
@@ -117,6 +118,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		brews:         map[[3]int32]*brewingState{},
 		openBrew:      map[int32][3]int32{},
 		enchOpen:     map[int32]bool{},
+		anvils:       map[int32]*anvilSession{},
 		chests:         map[[3]int32]*chestState{},
 		openChest:      map[int32][3]int32{},
 		orbs:           map[int32]*xpOrb{},
@@ -417,6 +419,10 @@ func (g *Game) handleEvent(e Event) {
 		if ev.p != nil {
 			g.closeEnchantTable(ev.p)
 		}
+	case *playerCloseAnvilEvent:
+		if ev.p != nil {
+			g.closeAnvil(ev.p)
+		}
 	case *playerEnchantEvent:
 		if ev.p != nil {
 			g.applyEnchant(ev.p, ev.tier)
@@ -657,6 +663,9 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 	}
 	if g.enchOpen[p.EntityID] {
 		g.closeEnchantTable(p)
+	}
+	if _, ok := g.anvils[p.EntityID]; ok {
+		g.closeAnvil(p)
 	}
 	delete(g.players, p.EntityID)
 	g.count.Store(int32(len(g.players)))

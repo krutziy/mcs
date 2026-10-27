@@ -150,6 +150,39 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 		g.syncEnchant(p)
 		return
 	}
+	// 铁砧窗口 6：独立路由
+	if ev.click.Window == 6 {
+		as, ok := g.anvils[p.EntityID]
+		if !ok {
+			return
+		}
+		slot := int32(ev.click.Slot)
+		if ev.click.Mode == packet.ClickModeClick && slot == 2 {
+			if g.takeAnvilResult(p) {
+				g.syncAnvil(p)
+			}
+			return
+		}
+		if ev.click.Mode == packet.ClickModeClick {
+			if ref := anvilSlotRef(as, p, slot); ref != nil {
+				// 附魔记录随物品进出
+				if slot == 0 || slot == 1 {
+					if ref.ID != 0 {
+						if slot == 0 {
+							as.ench0 = p.EnchItem
+						}
+					}
+				}
+				if ev.click.Button == 0 {
+					leftClickSlotRef(p, ref)
+				} else if ev.click.Button == 1 {
+					rightClickSlotRef(p, ref)
+				}
+			}
+		}
+		g.syncAnvil(p)
+		return
+	}
 	// 熔炉窗口 2：独立路由
 	if ev.click.Window == 2 {
 		pos, ok := g.openFurnace[p.EntityID]
