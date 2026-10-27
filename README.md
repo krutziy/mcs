@@ -16,7 +16,8 @@
 ## 核心能力（空壳自带）
 
 - **多版本同服**：1.21.11 / 26.1 / 26.2 / 26.3（协议 774-777），不同版本客户端同时在线互见
-- 离线登录（任意用户名）、服务器列表 ping、20TPS 主循环、KeepAlive
+- 登录：离线模式（任意用户名，默认）或正版验证（`online_mode: true`：AES-CFB8 加密通道 + Mojang session server hasJoined 校验，取正版 UUID/皮肤属性）
+- 服务器列表 ping、20TPS 主循环、KeepAlive
 - 事件总线（玩法扩展点）：`PlayerJoin / PlayerQuit / PlayerMoved / PlayerChatted / PlayerCommand / Tick`
 - 空世界（void）：客户端可进可动，世界为纯虚空——一切内容由插件注入
 - 内置命令：`/list` `/spawn` `/help`
@@ -57,6 +58,16 @@ func init() {
 ```
 
 config.json 的 `world.type`：`void`（空壳默认）/ `flat` / `noise`（需装配 terrain 插件）。
+config.json 的 `online_mode`：`false`（默认，任意用户名离线登录）/ `true`（正版验证）。
+
+### 正版验证（online_mode: true）
+
+login 阶段发送 clientbound `minecraft:hello`（服务器 RSA 公钥 + verify token），
+客户端回 `minecraft:key`（RSA 加密的共享密钥），随后双向启用 AES-CFB8 加密，
+再以认证哈希（`SHA-1(serverID="" + secret + 公钥)` 的 Java BigInteger 表示）调用
+Mojang `hasJoined` 校验身份，取正版 UUID 与皮肤属性写入 login_finished；
+验证失败以明确原因断开。key 包的 RSA 填充为 PKCS#1 v1.5
+（对 1.21.11 与 26.3 官方服实测确认，服务器端另保留 OAEP-SHA1 兜底）。
 
 ## 架构
 
@@ -111,7 +122,7 @@ README 的完整讨论。
 | 工具 | 用途 |
 |---|---|
 | `.tools/go` | 便携版 Go（`. .tools/env.sh` 后用 `$GO`） |
-| `cmd/recorder` | 协议录制客户端：连任意服务端按官方包名存包 |
+| `cmd/recorder` | 协议录制客户端：连任意服务端按官方包名存包；`-online` 可回应加密握手（正版模式对照，验证至 hasJoined 请求构造） |
 | `.tools/v263` 等 | 各版本官方参考服 + `--reports` 数据 |
 
 **更新嵌入资产**（升级版本时）：
@@ -129,7 +140,8 @@ cd .tools/vXXX/server && java -jar server.jar nogui   # 官方参考服
 ```
 
 - `protocol`：VarInt/NBT/Position 往返与官方样例字节
-- `conn`：分帧/压缩往返（含"低于阈值包带 0x00 标记"的字节级断言）
+- `conn`：分帧/压缩往返（含"低于阈值包带 0x00 标记"的字节级断言）；AES-CFB8 用 NIST SP 800-38A F.3.7/9/11 官方向量 + JDK 交叉验证的长流向量 + 加密/压缩组合往返
 - `packet`：黄金字节测试——与官方抓包逐字节比对（player_position、entity_position_sync）
+- `server`：认证哈希（Java BigInteger 风格 SHA-1）公开向量与组合向量、hasJoined 的 200/204/500 行为
 - `world`：虚空区块结构 ×4 版本、生成器注册表行为
 - `plugins/terrain`：区块黄金测试 ×2（775/774 生成输出与官方逐字节一致）、噪声结构/确定性

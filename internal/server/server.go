@@ -3,8 +3,15 @@
 package server
 
 import (
+	"bytes"
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha1"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -27,6 +34,7 @@ type Config struct {
 	ViewDistance int32       `json:"view_distance"`
 	Spawn        [3]float64  `json:"spawn"`
 	GameMode     string      `json:"gamemode"`
+	OnlineMode   bool        `json:"online_mode"`
 	World        WorldConfig `json:"world"`
 }
 
@@ -56,6 +64,7 @@ type Server struct {
 	suite *version.Suite
 	game  *game.Game
 	ln    net.Listener
+	auth  *authClient // 正版验证客户端，nil 时按默认（测试可打桩）
 }
 
 // New 创建服务端。
@@ -241,7 +250,16 @@ func (s *Server) handleLogin(c *conn.Conn, ver version.Version, suite *version.S
 		s.rejectLogin(c, int32(s.ver.Protocol))
 		return
 	}
-	uuid := offlineUUID(start.Username)
+	name := start.Username
+	uuid := offlineUUID(name)
+	var props []packet.Property
+	if s.cfg.OnlineMode {
+		var ok bool
+		uuid, name, props, ok = s.handleOnlineLogin(c, suite, start)
+		if !ok {
+			return // 失败原因已在内部写出并断开
+		}
+	}
 
 	// 启用压缩（先发压缩包再发成功包，顺序不能反）
 	c.WritePacket(suite.MustID("login", "clientbound", "minecraft:login_compression"), func(w *protocol.Writer) {
@@ -250,7 +268,7 @@ func (s *Server) handleLogin(c *conn.Conn, ver version.Version, suite *version.S
 	c.SetCompression(256)
 
 	c.WritePacket(suite.MustID("login", "clientbound", "minecraft:login_finished"), func(w *protocol.Writer) {
-		packet.WriteLoginFinished(w, uuid, start.Username)
+		packet.WriteLoginFinishedWithProperties(w, uuid, name, props)
 	})
 
 	// 等待 login_acknowledged
@@ -259,7 +277,114 @@ func (s *Server) handleLogin(c *conn.Conn, ver version.Version, suite *version.S
 		return
 	}
 	c.SetState(conn.StateConfiguration)
-	s.handleConfiguration(c, ver, suite, start.Username, uuid)
+	s.handleConfiguration(c, ver, suite, name, uuid)
+}
+
+// handleOnlineLogin 执行正版登录：加密握手 → Mojang hasJoined 验证。
+// 成功时返回正版 UUID、规范化用户名与皮肤属性；失败时向客户端写明原因
+// 并断开（返回 ok=false）。
+func (s *Server) handleOnlineLogin(c *conn.Conn, suite *version.Suite, start packet.LoginStart) (protocol.UUID, string, []packet.Property, bool) {
+	priv, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		s.rejectLoginPacket(c, suite, "服务器密钥生成失败，请稍后重试")
+		c.Close()
+		return protocol.UUID{}, "", nil, false
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		s.rejectLoginPacket(c, suite, "服务器密钥编码失败，请稍后重试")
+		c.Close()
+		return protocol.UUID{}, "", nil, false
+	}
+	verifyToken := make([]byte, 16)
+	if _, err := rand.Read(verifyToken); err != nil {
+		s.rejectLoginPacket(c, suite, "服务器随机数生成失败，请稍后重试")
+		c.Close()
+		return protocol.UUID{}, "", nil, false
+	}
+
+	// clientbound hello：请求加密（公钥 + 验证令牌）
+	c.WritePacket(suite.MustID("login", "clientbound", "minecraft:hello"), func(w *protocol.Writer) {
+		packet.WriteEncryptionRequest(w, packet.EncryptionRequest{
+			ServerID:           "",
+			PublicKey:          pubDER,
+			VerifyToken:        verifyToken,
+			ShouldAuthenticate: true,
+		})
+	})
+
+	keyID := suite.MustID("login", "serverbound", "minecraft:key")
+	id, r, err := c.ReadPacket()
+	if err != nil || id != keyID {
+		s.rejectLoginPacket(c, suite, "未收到加密握手回应，请使用正版客户端连接")
+		c.Close()
+		return protocol.UUID{}, "", nil, false
+	}
+	resp := packet.ReadEncryptionResponse(r)
+	if r.Err != nil {
+		s.rejectLoginPacket(c, suite, "加密握手回应格式错误")
+		c.Close()
+		return protocol.UUID{}, "", nil, false
+	}
+
+	secret := decryptKeyExchange(priv, resp.SharedSecret)
+	if len(secret) != 16 {
+		// 客户端发完 key 包即启用加密，此后无法再明文沟通，只能直接断开
+		c.Close()
+		return protocol.UUID{}, "", nil, false
+	}
+	gotToken := decryptKeyExchange(priv, resp.VerifyToken)
+	if !bytes.Equal(gotToken, verifyToken) {
+		c.Close()
+		return protocol.UUID{}, "", nil, false
+	}
+
+	// 客户端发完 key 包即已启用加密，此处必须同步启用，之后的包（含踢出消息）全走密文
+	if err := c.SetEncryption(secret); err != nil {
+		c.Close()
+		return protocol.UUID{}, "", nil, false
+	}
+
+	// Mojang 正版验证：serverID 恒空串的认证哈希规则
+	serverHash := AuthHash("", secret, pubDER)
+	auth := s.auth
+	if auth == nil {
+		auth = newAuthClient()
+	}
+	uuid, name, props, err := auth.HasJoined(start.Username, serverHash)
+	if err != nil {
+		reason := "正版验证暂时不可用，请稍后重试"
+		if errors.Is(err, ErrAuthRejected) {
+			reason = "正版验证未通过：请先用正版客户端登录此账号（session server 未确认该玩家）"
+		}
+		s.rejectLoginPacket(c, suite, reason)
+		c.Close()
+		log.Printf("[server] %s 正版验证失败: %v", start.Username, err)
+		return protocol.UUID{}, "", nil, false
+	}
+	log.Printf("[server] %s 正版验证通过 (uuid=%s)", name, hex.EncodeToString(uuid[:]))
+	return uuid, name, props, true
+}
+
+// decryptKeyExchange 解密 key 包里的 RSA 载荷。官方客户端（1.21.11~26.3
+// 实测）使用 PKCS#1 v1.5 填充；再以 OAEP-SHA1 兜底，兼容沿用旧约定的
+// 第三方实现。两种填充都失败返回 nil。
+func decryptKeyExchange(priv *rsa.PrivateKey, ct []byte) []byte {
+	if out, err := rsa.DecryptPKCS1v15(rand.Reader, priv, ct); err == nil {
+		return out
+	}
+	out, err := rsa.DecryptOAEP(sha1.New(), rand.Reader, priv, ct, nil)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// rejectLoginPacket 在登录阶段写出踢出包（不关连接，由调用方决定）。
+func (s *Server) rejectLoginPacket(c *conn.Conn, suite *version.Suite, reason string) {
+	c.WritePacket(suite.MustID("login", "clientbound", "minecraft:login_disconnect"), func(w *protocol.Writer) {
+		packet.WriteDisconnectLogin(w, fmt.Sprintf(`{"text":"%s"}`, reason))
+	})
 }
 
 // handleConfiguration 处理配置阶段：known packs 回显 → 注册表 → 完成配置。

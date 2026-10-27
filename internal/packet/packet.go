@@ -27,15 +27,76 @@ func ReadLoginStart(r *protocol.Reader) LoginStart {
 	return LoginStart{Username: r.String(), UUID: r.UUID()}
 }
 
-// WriteLoginFinished 写入登录成功包（uuid, name, properties）。
-func WriteLoginFinished(w *protocol.Writer, uuid protocol.UUID, name string) {
-	w.UUID(uuid)
-	w.String(name)
-	w.VarInt(0) // properties 数量：离线模式无皮肤属性
-}
-
 // WriteSetCompression 写入压缩阈值（负数表示关闭）。
 func WriteSetCompression(w *protocol.Writer, threshold int32) { w.VarInt(threshold) }
+
+// WriteLoginFinishedWithProperties 写入登录成功包（uuid, name, properties）。
+// 正版模式把 Mojang 返回的皮肤属性原样下发给客户端；离线模式传 nil 属性。
+
+// EncryptionRequest 是 clientbound minecraft:hello 加密请求：
+// serverID 恒为空串（历史遗留字段），公钥与验证令牌为字节数组。
+type EncryptionRequest struct {
+	ServerID    string
+	PublicKey   []byte
+	VerifyToken []byte
+	// ShouldAuthenticate: 26.x(775+) 新增，指示客户端是否走 Mojang 正版验证
+	ShouldAuthenticate bool
+}
+
+// WriteEncryptionRequest 写入加密请求包。
+func WriteEncryptionRequest(w *protocol.Writer, r EncryptionRequest) {
+	w.String(r.ServerID)
+	w.ByteArray(r.PublicKey)
+	w.ByteArray(r.VerifyToken)
+	w.Bool(r.ShouldAuthenticate)
+}
+
+// ReadEncryptionRequest 解析加密请求包（recorder 侧用）。
+func ReadEncryptionRequest(r *protocol.Reader) EncryptionRequest {
+	req := EncryptionRequest{ServerID: r.String()}
+	req.PublicKey = r.ByteArray()
+	req.VerifyToken = r.ByteArray()
+	req.ShouldAuthenticate = r.Bool()
+	return req
+}
+
+// EncryptionResponse 是 serverbound minecraft:key：
+// 共享密钥与验证令牌均以服务器 RSA 公钥加密后回传。
+type EncryptionResponse struct {
+	SharedSecret []byte
+	VerifyToken  []byte
+}
+
+// WriteEncryptionResponse 写入加密回应包（recorder 侧用）。
+func WriteEncryptionResponse(w *protocol.Writer, r EncryptionResponse) {
+	w.ByteArray(r.SharedSecret)
+	w.ByteArray(r.VerifyToken)
+}
+
+// ReadEncryptionResponse 解析加密回应包。
+func ReadEncryptionResponse(r *protocol.Reader) EncryptionResponse {
+	return EncryptionResponse{SharedSecret: r.ByteArray(), VerifyToken: r.ByteArray()}
+}
+
+// Property 是玩家档案属性（正版皮肤的 textures 等）。
+type Property struct {
+	Name      string
+	Value     string
+	Signature string
+}
+
+// WriteLoginFinishedWithProperties 写入登录成功包（uuid, name, properties）。
+// 正版模式把 Mojang 返回的皮肤属性原样下发给客户端。
+func WriteLoginFinishedWithProperties(w *protocol.Writer, uuid protocol.UUID, name string, props []Property) {
+	w.UUID(uuid)
+	w.String(name)
+	w.VarInt(int32(len(props)))
+	for _, p := range props {
+		w.String(p.Name)
+		w.String(p.Value)
+		w.String(p.Signature)
+	}
+}
 
 // WriteDisconnectLogin 写入登录阶段踢出消息（JSON 文本组件）。
 func WriteDisconnectLogin(w *protocol.Writer, reason string) { w.String(reason) }

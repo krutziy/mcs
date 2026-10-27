@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
+	"crypto/aes"
+	"crypto/cipher"
 	"errors"
 	"fmt"
 	"io"
@@ -72,6 +74,30 @@ func (c *Conn) SetCompression(threshold int32) {
 	c.writeMu.Lock()
 	c.compression = threshold
 	c.writeMu.Unlock()
+}
+
+// SetEncryption 用共享密钥启用 AES-CFB8 双向加密：读写各持一个独立的
+// CFB8 流，IV 取密钥本身（与客户端的 AES/CFB8/NoPadding 约定一致）。
+// 加密作用在分帧字节流上，与压缩（压缩在内层）自然组合。
+// 必须在读写完密钥协商包（minecraft:key）之后、收发任何后续包之前调用；
+// 调用前尚未冲刷的明文写出会先被冲刷。
+func (c *Conn) SetEncryption(sharedSecret []byte) error {
+	block, err := aes.NewCipher(sharedSecret)
+	if err != nil {
+		return err
+	}
+	enc := newCFB8Stream(block, sharedSecret, false)
+	dec := newCFB8Stream(block, sharedSecret, true)
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := c.wbuf.Flush(); err != nil {
+		return err
+	}
+	// 读端包住旧缓冲：若底层已预读入密文，一并交给解密流
+	c.rbuf = bufio.NewReaderSize(cipher.StreamReader{S: dec, R: c.rbuf}, 64*1024)
+	c.wbuf = bufio.NewWriterSize(&cipher.StreamWriter{S: enc, W: c.tcp}, 128*1024)
+	return nil
 }
 
 // RemoteAddr 返回对端地址。
@@ -247,4 +273,3 @@ func varIntLen(v int32) int {
 
 // Close 关闭底层连接。
 func (c *Conn) Close() error { return c.tcp.Close() }
-

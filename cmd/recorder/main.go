@@ -14,18 +14,27 @@ import (
 	"time"
 
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/x509"
 
 	"mcserver/internal/conn"
+	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
+	"mcserver/internal/server"
 	"mcserver/internal/version"
 )
 
 var (
-	addr       = flag.String("addr", "127.0.0.1:25566", "目标服务端地址")
-	outDir     = flag.String("out", ".tools/captures", "抓包输出目录")
-	username   = flag.String("user", "Recorder", "登录用户名")
-	duration   = flag.Duration("t", 8*time.Second, "游戏阶段录制时长")
-	verName    = flag.String("version", "", "协议版本名（如 26.3 / 1.21.11），默认最新")
+	addr     = flag.String("addr", "127.0.0.1:25566", "目标服务端地址")
+	outDir   = flag.String("out", ".tools/captures", "抓包输出目录")
+	username = flag.String("user", "Recorder", "登录用户名")
+	duration = flag.Duration("t", 8*time.Second, "游戏阶段录制时长")
+	verName  = flag.String("version", "", "协议版本名（如 26.3 / 1.21.11），默认最新")
+	online   = flag.Bool("online", false, "回应服务器加密握手（正版模式对照；无正版会话，hasJoined 必然失败）")
+	rsaPad   = flag.String("rsa-pad", "pkcs1", "key 包 RSA 填充：pkcs1 | oaep-sha1 | oaep-sha256（官方 1.21.11~26.3 实测为 pkcs1）")
 )
 
 // offlineUUID 按离线模式规则（UUID v3 of "OfflinePlayer:<name>"）派生玩家 UUID。
@@ -104,6 +113,11 @@ func main() {
 		r = protocol.NewReader(body)
 
 		switch {
+		case c.State() == conn.StateLogin && name == "minecraft:hello":
+			if !*online {
+				log.Fatalf("服务器要求加密（正版模式），当前未开启 -online")
+			}
+			handleEncryptionRequest(c, suite, body, *username)
 		case c.State() == conn.StateLogin && name == "minecraft:login_compression":
 			threshold := r.VarInt()
 			log.Printf("启用压缩, 阈值=%d", threshold)
@@ -205,6 +219,62 @@ func recordPlay(c *conn.Conn, suite *version.Suite, proto version.Protocol, seq 
 		}
 	}
 	log.Printf("录制完成，共 %d 个包", *seq)
+}
+
+// handleEncryptionRequest 回应服务器的加密请求：生成共享密钥并用服务器
+// RSA 公钥加密回传（minecraft:key），发出后立即启用 AES-CFB8——与客户端
+// 约定一致，此后双向全密文。最后打印服务器将用于 hasJoined 的 serverId
+// 供对照（recorder 无正版会话，正版验证止步于该请求的构造）。
+func handleEncryptionRequest(c *conn.Conn, s *version.Suite, body []byte, user string) {
+	r := protocol.NewReader(body)
+	req := packet.ReadEncryptionRequest(r)
+	if r.Err != nil { // 兼容无 ShouldAuthenticate 尾字段的旧格式
+		r = protocol.NewReader(body)
+		req = packet.EncryptionRequest{ServerID: r.String(), PublicKey: r.ByteArray(), VerifyToken: r.ByteArray()}
+		if r.Err != nil {
+			log.Fatalf("解析 minecraft:hello 失败: %v", r.Err)
+		}
+	}
+	pubAny, err := x509.ParsePKIXPublicKey(req.PublicKey)
+	if err != nil {
+		log.Fatalf("解析服务器公钥失败: %v", err)
+	}
+	pub, ok := pubAny.(*rsa.PublicKey)
+	if !ok {
+		log.Fatal("服务器公钥不是 RSA")
+	}
+	secret := make([]byte, 16)
+	if _, err := rand.Read(secret); err != nil {
+		log.Fatal(err)
+	}
+	encSecret, err := rsaEncrypt(pub, secret, *rsaPad)
+	if err != nil {
+		log.Fatalf("加密共享密钥失败: %v", err)
+	}
+	encToken, err := rsaEncrypt(pub, req.VerifyToken, *rsaPad)
+	if err != nil {
+		log.Fatalf("加密验证令牌失败: %v", err)
+	}
+	c.WritePacket(s.MustID("login", "serverbound", "minecraft:key"), func(w *protocol.Writer) {
+		packet.WriteEncryptionResponse(w, packet.EncryptionResponse{SharedSecret: encSecret, VerifyToken: encToken})
+	})
+	if err := c.SetEncryption(secret); err != nil {
+		log.Fatalf("启用加密失败: %v", err)
+	}
+	serverID := server.AuthHash(req.ServerID, secret, req.PublicKey)
+	log.Printf("加密已启用；服务器侧将发起 hasJoined (username=%s serverId=%s)", user, serverID)
+}
+
+// rsaEncrypt 按 -rsa-pad 指定的填充加密（对照不同服务端实现用）。
+func rsaEncrypt(pub *rsa.PublicKey, data []byte, pad string) ([]byte, error) {
+	switch pad {
+	case "pkcs1":
+		return rsa.EncryptPKCS1v15(rand.Reader, pub, data)
+	case "oaep-sha256":
+		return rsa.EncryptOAEP(sha256.New(), rand.Reader, pub, data, nil)
+	default: // oaep-sha1：Java "RSA/ECB/OAEPWithSHA-1AndMGF1Padding" 的等价
+		return rsa.EncryptOAEP(sha1.New(), rand.Reader, pub, data, nil)
+	}
 }
 
 func lookup(s *version.Suite, state string, id int32) string {

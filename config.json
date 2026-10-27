@@ -5,6 +5,7 @@
   "view_distance": 3,
   "spawn": [8, -16, 8],
   "gamemode": "creative",
+  "online_mode": false,
   "world": {
     "type": "void",
     "seed": 20261010
