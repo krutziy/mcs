@@ -138,7 +138,7 @@ func (g *Game) recomputeRedstone() {
 					wires = append(wires, rsPos{wx, wy, wz})
 				case s == torchLit || s == torchUnlit:
 					torches = append(torches, rsPos{wx, wy, wz})
-				case s == rsBlock || s == leverOn:
+				case s == rsBlock || s == leverOn || s == comparatorOn || s == comparatorSubOn:
 					sources = append(sources, rsPos{wx, wy, wz})
 				case s == lampOn || s == lampOff:
 					lamps = append(lamps, rsPos{wx, wy, wz})
@@ -422,4 +422,200 @@ func (g *Game) tickPistons() {
 		return
 	}
 	g.actPistons()
+}
+
+// ---- 比较器 / 观察者 ----
+
+var (
+	comparatorOn  uint32 = 13030 // north/compare/powered
+	comparatorOff uint32 = 13031
+	comparatorSubOn  uint32 = 13032 // north/subtract/powered
+	comparatorSubOff uint32 = 13033
+	observerOn    uint32 = 16833 // north/powered
+	observerOff   uint32 = 16834
+)
+
+var comparatorStates = map[uint32]bool{13030: true, 13031: true, 13032: true, 13033: true}
+var observerStates = map[uint32]bool{16833: true, 16834: true}
+
+// comparatorSignal 比较器读后方容器强度：满格数 / 总格数 × 15（原版近似）。
+func (g *Game) comparatorSignal(x, y, z int32) int32 {
+	// 后方（north 朝向 → 输入在 +z 侧，我们状态全部 north）
+	bx, by, bz := x, y, z+1
+	bs := g.world.GetBlock(bx, by, bz)
+	var filled, total float64
+	switch {
+	case bs == chestBlockState:
+		cs := g.chests[[3]int32{bx, by, bz}]
+		if cs == nil {
+			return 0
+		}
+		for i := range cs.slots {
+			if cs.slots[i].ID != 0 {
+				filled++
+			}
+		}
+		total = chestSlots
+	case bs == furnaceLit || bs == furnaceUnlit:
+		fu := g.furnaces[[3]int32{bx, by, bz}]
+		if fu == nil {
+			return 0
+		}
+		for _, it := range []entity.Item{fu.input, fu.fuel, fu.output} {
+			if it.ID != 0 {
+				filled++
+			}
+		}
+		total = 3
+	case bs == brewingStandState:
+		br := g.brews[[3]int32{bx, by, bz}]
+		if br == nil {
+			return 0
+		}
+		for _, it := range br.slots {
+			if it.ID != 0 {
+				filled++
+			}
+		}
+		total = 4
+	default:
+		return 0
+	}
+	if total == 0 {
+		return 0
+	}
+	return int32(filled / total * 15)
+}
+
+// actComparators 比较器：读后输入（容器强度或后方线 power）与侧输入比较。
+// 简化：compare 模式输出 = max(后-侧, 0)；subtract 模式输出 = 后-侧。
+func (g *Game) actComparators() {
+	g.world.EachChunk(func(cx, cz int32, ch *world.Chunk) {
+		for i := int32(0); i < world.NumSections; i++ {
+			sec := ch.Section(i)
+			if sec == nil {
+				continue
+			}
+			for idx := int32(0); idx < world.SectionVol; idx++ {
+				s := sec.Blocks[idx]
+				if !comparatorStates[s] {
+					continue
+				}
+				y := i*16 + idx>>8
+				z := (idx>>4)&15
+				x := idx & 15
+				wx, wy, wz := cx*16+x, y+world.MinY, cz*16+z
+				// 后方强度：容器优先，否则后方线 power
+				back := g.comparatorSignal(wx, wy, wz)
+				if back == 0 {
+					if p := rsWirePower(g.world.GetBlock(wx, wy, wz+1)); p > 0 {
+						back = p
+					}
+				}
+				// 侧输入（东西侧线最大值）
+				side := int32(0)
+				for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}} {
+					if p := rsWirePower(g.world.GetBlock(wx+d[0], wy, wz+d[2])); p > side {
+						side = p
+					}
+				}
+				subtract := s == comparatorSubOn || s == comparatorSubOff
+				out := back - side
+				if !subtract && out < back {
+					out = back // compare 模式：侧<后 → 输出=后
+				}
+				if out < 0 {
+					out = 0
+				}
+				want := comparatorOff
+				if out > 0 {
+					if subtract {
+						want = comparatorSubOn
+					} else {
+						want = comparatorOn
+					}
+				} else if subtract {
+					want = comparatorSubOff
+				}
+				// 保持模式族（subtract/compare 切换由玩家右键，简化为不切）
+				if g.world.GetBlock(wx, wy, wz) != want {
+					g.setRS(wx, wy, wz, want)
+					g.rsDirty = true
+				}
+			}
+		}
+	})
+}
+
+// tickComparators 与活塞同节拍。
+func (g *Game) tickComparators() {
+	if g.tick%2 != 0 {
+		return
+	}
+	g.actComparators()
+}
+
+// toggleComparator 右键比较器切 compare/subtract 模式。
+func (g *Game) toggleComparator(p *entity.Player, u packet.UseItemOn) bool {
+	s := g.world.GetBlock(u.X, u.Y, u.Z)
+	var ns uint32
+	switch s {
+	case comparatorOn:
+		ns = comparatorSubOn
+	case comparatorOff:
+		ns = comparatorSubOff
+	case comparatorSubOn:
+		ns = comparatorOn
+	case comparatorSubOff:
+		ns = comparatorOff
+	default:
+		return false
+	}
+	g.applyBlock(u.X, u.Y, u.Z, ns, u.Sequence, p)
+	g.rsDirty = true
+	if u.Sequence > 0 {
+		p.Send.SendPlay("minecraft:block_changed_ack", func(w *protocol.Writer) {
+			packet.WriteBlockChangedAck(w, u.Sequence)
+		})
+	}
+	return true
+}
+
+// 观察者：检测"面前"方块变化（朝 north=面前 -z）→ 短脉冲。
+// 简化：方块更新调度时若触及观察者面前 → 点亮 2 刻后自动灭。
+func (g *Game) scheduleObserverCheck(x, y, z int32) {
+	for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}} {
+		nx, ny, nz := x+d[0], y+d[1], z+d[2]
+		if !observerStates[g.world.GetBlock(nx, ny, nz)] {
+			continue
+		}
+		// 观察者面前是 (x,y,z)？north 朝向面前 = -z 方向的邻居
+		if g.world.GetBlock(nx, ny, nz-1) == g.world.GetBlock(x, y, z) || (nx == x && ny == y && nz-1 == z) {
+			// 面前变化 → 脉冲
+			if g.world.GetBlock(nx, ny, nz) == observerOff {
+				g.setRS(nx, ny, nz, observerOn)
+				g.rsDirty = true
+				g.observerPulse = append(g.observerPulse, [4]int32{nx, ny, nz, int32(g.tick) + 2})
+			}
+		}
+	}
+}
+
+// tickObservers 脉冲到期熄灭。
+func (g *Game) tickObservers() {
+	if g.tick%2 != 0 || len(g.observerPulse) == 0 {
+		return
+	}
+	var remain [][4]int32
+	for _, op := range g.observerPulse {
+		if int32(g.tick) >= op[3] {
+			if g.world.GetBlock(op[0], op[1], op[2]) == observerOn {
+				g.setRS(op[0], op[1], op[2], observerOff)
+				g.rsDirty = true
+			}
+		} else {
+			remain = append(remain, op)
+		}
+	}
+	g.observerPulse = remain
 }

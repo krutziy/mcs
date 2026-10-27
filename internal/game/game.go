@@ -90,6 +90,7 @@ type Game struct {
 	enchOpen     map[int32]bool           // 打开附魔台的玩家
 	enchants     map[string]assets.EnchantInfo // 附魔表
 	rsDirty      bool                     // 红石网络待重算
+	observerPulse [][4]int32                // 观察者脉冲（位置+到期刻）
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
@@ -297,6 +298,8 @@ func (g *Game) tickNow() {
 	g.tickEffects()
 	g.tickRedstone()
 	g.tickPistons()
+	g.tickComparators()
+	g.tickObservers()
 	g.tickStats()
 
 	if g.tick%20 == 0 { // 每秒

@@ -850,3 +850,83 @@ func TestStickyPistonPull(t *testing.T) {
 		t.Fatal("原位应清空")
 	}
 }
+
+// TestComparatorChestSignal 比较器读箱：空箱 0、放物品后信号>0、减法模式。
+func TestComparatorChestSignal(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	// 布局（north 朝向：输入在 +z、输出在 -z）：箱子(1,-61,1) 比较器(1,-61,0) 线(1,-61,-1) 灯(1,-61,-2)
+	g.world.SetBlock(1, -61, 1, chestBlockState)
+	g.world.SetBlock(1, -61, 0, comparatorOff)
+	g.world.SetBlock(1, -61, -1, wireBase[0])
+	g.world.SetBlock(1, -61, -2, lampOff)
+
+	g.rsDirty = true
+	g.tick = 2
+	g.tickRedstone()
+	g.tickComparators()
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	if got := g.world.GetBlock(1, -61, 0); got != comparatorOff {
+		t.Fatalf("空箱比较器应无输出: %d", got)
+	}
+	if g.world.GetBlock(1, -61, -2) != lampOff {
+		t.Fatal("空箱灯应灭")
+	}
+
+	// 往箱里放 3 个石头（27 格中 1 格 → 信号 0…… 原版 1 格满堆 ≈ 1）
+	// 我们的公式 filled/total*15：1/27*15=0（取整）——改放更多观察
+	pos := [3]int32{1, -61, 1}
+	g.chests[pos] = &chestState{}
+	for i := 0; i < 14; i++ { // 14/27*15 = 7
+		g.chests[pos].slots[i] = entity.Item{ID: ids["stone"], Count: 64}
+	}
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	g.rsDirty = true
+	g.tick += 2
+	g.tickComparators()
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	if got := g.world.GetBlock(1, -61, 0); got != comparatorOn {
+		t.Fatalf("半箱比较器应点亮: %d", got)
+	}
+	if got := rsWirePower(g.world.GetBlock(1, -61, -1)); got != 15 {
+		t.Fatalf("比较器输出线应为 15: %d", got)
+	}
+	if g.world.GetBlock(1, -61, -2) != lampOn {
+		t.Fatal("满信号灯应亮")
+	}
+
+	// 右键切减法模式
+	if !g.toggleComparator(p, packet.UseItemOn{X: 1, Y: -61, Z: 0, Face: 1, Sequence: 9}) {
+		t.Fatal("右键比较器应切模式")
+	}
+	if got := g.world.GetBlock(1, -61, 0); got != comparatorSubOn {
+		t.Fatalf("应切到减法（仍供电，因侧输入 0）: %d", got)
+	}
+}
+
+// TestObserverPulse 观察者：面前方块变化 → 脉冲后自动灭。
+func TestObserverPulse(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	// 观察者(1,-61,0 朝 north) 面前(1,-61,-1)；面前放石头触发
+	g.world.SetBlock(1, -61, 0, observerOff)
+
+	g.world.SetBlock(1, -61, -1, world.StateStone)
+	g.recordBlockChange(1, -61, -1, world.StateStone)
+	g.scheduleObserverCheck(1, -61, -1)
+	if g.world.GetBlock(1, -61, 0) != observerOn {
+		t.Fatal("面前变化观察者应脉冲点亮")
+	}
+	// 2 刻后自动灭
+	g.tick = 4
+	g.tickObservers()
+	if g.world.GetBlock(1, -61, 0) != observerOff {
+		t.Fatal("脉冲到期应熄灭")
+	}
+	_ = p
+}
