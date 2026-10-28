@@ -365,3 +365,46 @@ func Enchants(proto int32) map[string]EnchantInfo {
 	}
 	return m
 }
+
+// BlockNamesFull 返回 777 状态 → 规范名（含属性，Anvil palette 用）。
+func BlockNamesFull(proto int32) map[uint32]string {
+	b, err := files.ReadFile(fmt.Sprintf("data/blocknames_full_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[uint32]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if v, err := strconv.ParseUint(parts[0], 10, 32); err == nil {
+			m[uint32(v)] = parts[1]
+		}
+	}
+	return m
+}
+
+// BlockDefaults 返回方块短名（无属性）→ 默认状态 ID（Anvil palette 回退）。
+func BlockDefaults(proto int32) map[string]uint32 {
+	return loadU32Table(proto, "blockdefaults")
+}
+
+// loadU32Table 读取 "名称 数值" 表。
+func loadU32Table(proto int32, prefix string) map[string]uint32 {
+	b, err := files.ReadFile(fmt.Sprintf("data/%s_%d.txt", prefix, proto))
+	if err != nil {
+		return nil
+	}
+	m := map[string]uint32{}
+	for _, line := range strings.Split(string(b), "\n") {
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if v, err := strconv.ParseUint(parts[1], 10, 32); err == nil {
+			m[parts[0]] = uint32(v)
+		}
+	}
+	return m
+}

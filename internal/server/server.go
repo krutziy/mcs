@@ -37,6 +37,7 @@ type WorldConfig struct {
 	Type    string `json:"type"`     // flat | noise
 	Seed    int64  `json:"seed"`
 	SaveDir string `json:"save_dir"` // 存档目录（相对工作目录；空 = 不持久化）
+	Format  string `json:"format"`   // own（默认自有格式）| anvil（官方 region 互操作）
 }
 
 // DefaultConfig 返回默认配置。
@@ -95,6 +96,7 @@ func New(cfg Config) (*Server, error) {
 		WorldType:    cfg.World.Type,
 		WorldSeed:    cfg.World.Seed,
 		SaveDir:      cfg.World.SaveDir,
+		Anvil:        cfg.World.Format == "anvil",
 	}, suite)
 	return &Server{cfg: cfg, ver: ver, suite: suite, game: g, privKey: priv}, nil
 }

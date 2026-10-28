@@ -29,6 +29,7 @@ type Config struct {
 	WorldType              string // "flat" | "noise"
 	WorldSeed              int64
 	SaveDir                string // 世界存档目录（空 = 不持久化）
+	Anvil                  bool   // 存档用官方 Anvil 格式（region 互操作）
 }
 
 // Game 聚合全部游戏状态，由主循环独占访问。
@@ -195,6 +196,18 @@ func New(cfg Config, suite *version.Suite) *Game {
 	}
 	// 世界持久化：读档优先于生成器
 	if cfg.SaveDir != "" {
+		if cfg.Anvil {
+			canon := assets.BlockNamesFull(777)
+			inv := map[string]uint32{}
+			for k, v := range canon {
+				inv[v] = k
+			}
+			if n, err := g.world.LoadAnvil(cfg.SaveDir, inv); err != nil {
+				log.Printf("[game] Anvil 读档失败: %v", err)
+			} else if n > 0 {
+				log.Printf("[game] Anvil 读档 %d 个区块", n)
+			}
+		}
 		if n, err := g.world.Load(cfg.SaveDir); err != nil {
 			log.Printf("[game] 世界读档失败: %v", err)
 		} else if n > 0 {
@@ -317,6 +330,18 @@ func (g *Game) tickNow() {
 
 // saveAll 保存世界脏区块、时间与玩家状态。
 func (g *Game) saveAll() {
+	if g.Cfg.Anvil {
+		canon := assets.BlockNamesFull(777)
+		inv := map[string]uint32{}
+		for k, v := range canon {
+			inv[v] = k
+		}
+		if n, err := g.world.SaveAnvil(g.Cfg.SaveDir, canon, inv); err != nil {
+			log.Printf("[game] Anvil 存档失败: %v", err)
+		} else if n > 0 {
+			log.Printf("[game] Anvil 存档 %d 个区块", n)
+		}
+	}
 	if n, err := g.world.Save(g.Cfg.SaveDir); err != nil {
 		log.Printf("[game] 世界存档失败: %v", err)
 	} else if n > 0 {
