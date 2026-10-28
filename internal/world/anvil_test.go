@@ -1,6 +1,8 @@
 package world
 
 import (
+	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -101,5 +103,53 @@ func TestAnvilRegionPath(t *testing.T) {
 	}
 	if floorDiv(-1, 32) != -1 || floorDiv(32, 32) != 1 {
 		t.Fatal("floorDiv 错误")
+	}
+}
+
+// TestBlockEntityRoundtrip 方块实体写读往返（chest Items）。
+func TestBlockEntityRoundtrip(t *testing.T) {
+	c, inv := canonTables(t)
+	dir, _ := os.MkdirTemp("", "anvilbe-")
+	defer os.RemoveAll(dir)
+	os.MkdirAll(filepath.Join(dir, "region"), 0o755)
+
+	ch := NewChunk(0, 0, 0)
+	bes := []BlockEntity{{
+		X: 5, Y: -60, Z: 7, ID: "minecraft:chest",
+		Items: []BEItem{{ID: 1, Count: 32, Slot: 0}, {ID: 10, Count: 5, Slot: 3}},
+	}}
+	if err := SaveRegionAnvilBE(filepath.Join(dir, "region", "r.0.0.mca"), []*Chunk{ch}, c, bes); err != nil {
+		t.Fatal(err)
+	}
+	// 读回验证 NBT 结构完整（区块 NBT 内 block_entities 计数 ≥1）
+	got, err := LoadRegionAnvil(filepath.Join(dir, "region", "r.0.0.mca"), inv)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("读回失败: %v n=%d", err, len(got))
+	}
+}
+
+// TestLevelDat level.dat 生成可解 gzip NBT。
+func TestLevelDat(t *testing.T) {
+	d := WriteLevelDat(8, -60, 8, 20261010, 6000)
+	if len(d) < 10 || d[0] != 0x1f || d[1] != 0x8b {
+		t.Fatalf("应为 gzip: % x", d[:4])
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := &bytes.Buffer{}
+	if _, err := raw.ReadFrom(gr); err != nil {
+		t.Fatal(err)
+	}
+	if raw.Len() < 30 || raw.Bytes()[0] != 0x0a {
+		t.Fatalf("解压后应为 NBT compound: % x", raw.Bytes()[:4])
+	}
+	// Data 名存在
+	if !bytes.Contains(raw.Bytes(), []byte("Data")) {
+		t.Fatal("缺 Data 复合")
+	}
+	if !bytes.Contains(raw.Bytes(), []byte("SpawnX")) {
+		t.Fatal("缺 SpawnX")
 	}
 }

@@ -143,4 +143,6 @@ Minecraft EULA 约束的是 Mojang 软件本身的使用。本项目：
   - [x] Anvil 存档格式：官方 region(.mca) 读写互操作（NBT 区块编码、
     palette 容器、TAG_Long_Array data、扇区表/zlib），解析官方服务端
     存档验证（1292 区块、flat 层正确还原），config `world.format:"anvil"`
-    启用（默认自有格式）；palette 无属性名回退默认状态
+    启用（默认自有格式）；palette 无属性名回退默认状态；
+    方块实体（箱子/熔炉/酿造台 Items+进度）写入 NBT block_entities，
+    level.dat（gzip NBT）同步生成供官方工具识别

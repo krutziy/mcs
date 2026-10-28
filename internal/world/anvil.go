@@ -341,6 +341,11 @@ const sectorSize = 4096
 
 // SaveRegionAnvil 把一组区块写入 r.X.Z.mca（Anvil 格式）。
 func SaveRegionAnvil(path string, chunks []*Chunk, canonical map[uint32]string) error {
+	return SaveRegionAnvilBE(path, chunks, canonical, nil)
+}
+
+// SaveRegionAnvilBE 带方块实体的 region 写入。
+func SaveRegionAnvilBE(path string, chunks []*Chunk, canonical map[uint32]string, bes []BlockEntity) error {
 	// 排序保证确定性
 	sort.Slice(chunks, func(i, j int) bool {
 		a, b := chunks[i], chunks[j]
@@ -358,7 +363,7 @@ func SaveRegionAnvil(path string, chunks []*Chunk, canonical map[uint32]string) 
 	stamps := make([]byte, 4096)
 	sector := uint32(2) // 头两扇区
 	for _, ch := range chunks {
-		nbt := ch.WriteNBTChunk(canonical)
+		nbt := ch.WriteNBTChunkWithBE(canonical, bes)
 		var z bytes.Buffer
 		zw := zlib.NewWriter(&z)
 		zw.Write(nbt)
@@ -445,6 +450,11 @@ func floorDiv(a, b int32) int32 {
 
 // SaveAnvil 全部脏区块按 region 分组写 Anvil（合并旧 region 内容）。
 func (m *Manager) SaveAnvil(dir string, canonical map[uint32]string, inverse map[string]uint32) (int, error) {
+	return m.SaveAnvilBE(dir, canonical, inverse, nil)
+}
+
+// SaveAnvilBE 带方块实体的 Anvil 存档。
+func (m *Manager) SaveAnvilBE(dir string, canonical map[uint32]string, inverse map[string]uint32, bes []BlockEntity) (int, error) {
 	rd := filepath.Join(dir, "region")
 	if err := os.MkdirAll(rd, 0o755); err != nil { return 0, err }
 	byRegion := map[[2]int32][]*Chunk{}
@@ -467,7 +477,7 @@ func (m *Manager) SaveAnvil(dir string, canonical map[uint32]string, inverse map
 				if !dup { list = append(list, oc) }
 			}
 		}
-		if err := SaveRegionAnvil(path, list, canonical); err != nil {
+		if err := SaveRegionAnvilBE(path, list, canonical, bes); err != nil {
 			return n, err
 		}
 	}
@@ -512,4 +522,143 @@ func defaultsOf(inverse map[string]uint32) map[string]uint32 {
 		}
 	}
 	return m
+}
+
+// ---- 方块实体 + level.dat ----
+
+// BlockEntityData 由 game 层提供的方块实体导出（位置 → NBT 体字段）。
+// 接口约定：返回 {id, x, y, z, Items[]} 形式的中间结构。
+type BEItem struct {
+	ID     int32
+	Count  int32
+	Damage int32
+	Slot   int32
+}
+
+type BlockEntity struct {
+	X, Y, Z int32
+	ID      string // minecraft:chest / minecraft:furnace / minecraft:brewing_stand
+	Items   []BEItem
+	Extra   map[string]int64 // 熔炉进度等（BurnTime/CookTime）
+}
+
+// SetBlockEntityExporter 注册导出器（game 层把箱/熔炉/酿造台状态交给存档层）。
+type BEExporter func() []BlockEntity
+
+// WriteNBTChunkWithBE 带方块实体的区块编码。
+func (c *Chunk) WriteNBTChunkWithBE(canonical map[uint32]string, bes []BlockEntity) []byte {
+	n := &nbtWriter{}
+	n.compound("")
+	n.name(0x08, "Status"); n.str("minecraft:full")
+	n.name(0x03, "xPos"); n.i32(c.CX)
+	n.name(0x03, "zPos"); n.i32(c.CZ)
+	n.name(0x03, "yPos"); n.i32(-4)
+	n.name(0x04, "LastUpdate"); n.i64(time.Now().UnixMilli())
+	n.name(0x04, "InhabitedTime"); n.i64(0)
+	// block_entities（本区块内的）
+	mine := 0
+	for _, be := range bes {
+		if be.X>>4 == c.CX && be.Z>>4 == c.CZ {
+			mine++
+		}
+	}
+	n.name(0x09, "block_entities")
+	n.byteAt(10); n.i32(int32(mine))
+	for _, be := range bes {
+		if be.X>>4 != c.CX || be.Z>>4 != c.CZ {
+			continue
+		}
+		// TAG_List 元素：无前缀，字段 + 0x00
+		n.name(0x08, "id"); n.str(be.ID)
+		n.name(0x03, "x"); n.i32(be.X)
+		n.name(0x03, "y"); n.i32(be.Y)
+		n.name(0x03, "z"); n.i32(be.Z)
+		n.name(0x09, "Items")
+		n.byteAt(10); n.i32(int32(len(be.Items)))
+		for _, it := range be.Items {
+			n.name(0x08, "id"); n.str(itemNameForBE(it.ID))
+			n.name(0x01, "Count"); n.byteAt(byte(it.Count))
+			n.name(0x03, "Slot"); n.i32(it.Slot)
+			if it.Damage > 0 {
+				n.name(0x03, "Damage"); n.i32(it.Damage)
+			}
+			n.end()
+		}
+		for k, v := range be.Extra {
+			n.name(0x03, k); n.i32(int32(v))
+		}
+		n.end()
+	}
+	for _, hm := range []string{"MOTION_BLOCKING", "WORLD_SURFACE", "OCEAN_FLOOR", "MOTION_BLOCKING_NO_LEAVES"} {
+		n.name(0x0c, hm); n.i32(37)
+		for i := 0; i < 37; i++ { n.i64(0) }
+	}
+	n.name(0x09, "sections")
+	n.byteAt(10); n.i32(NumSections)
+	for i := int32(0); i < NumSections; i++ {
+		sec := c.sections[i]
+		n.name(0x01, "Y"); n.byteAt(byte(int8(i - 4)))
+		if sec == nil {
+			n.compound("block_states")
+			n.name(0x09, "palette"); n.byteAt(8); n.i32(1); n.str("minecraft:air")
+			n.end()
+		} else {
+			palette, indices := buildAnvilPalette(&sec.Blocks, canonical)
+			n.compound("block_states")
+			n.name(0x09, "palette"); n.byteAt(8); n.i32(int32(len(palette)))
+			for _, p := range palette { n.str(p) }
+			bits := anvilBits(len(palette))
+			if len(palette) > 1 {
+				longs := packValues(indices, bits)
+				n.name(0x0c, "data"); n.i32(int32(len(longs)))
+				for _, L := range longs { n.i64(int64(L)) }
+			}
+			n.end()
+		}
+		n.compound("biomes")
+		n.name(0x09, "palette"); n.byteAt(8); n.i32(1); n.str("minecraft:plains")
+		n.end()
+		n.end()
+	}
+	n.end()
+	n.end()
+	return n.buf.Bytes()
+}
+
+// beItemNames 777 物品 ID → 规范名（存档层惰性注入）。
+var beItemNames map[int32]string
+
+// SetBEItemNames 注入物品名表（assets 层调用）。
+func SetBEItemNames(m map[int32]string) { beItemNames = m }
+
+func itemNameForBE(id int32) string {
+	if n := beItemNames[id]; n != "" {
+		return n
+	}
+	return "minecraft:stone"
+}
+
+// WriteLevelDat 生成官方 level.dat（gzip NBT，最小字段集）。
+func WriteLevelDat(spawnX, spawnY, spawnZ int32, seed int64, time int64) []byte {
+	n := &nbtWriter{}
+	n.compound("")
+	n.compound("Data")
+	n.name(0x08, "LevelName"); n.str("mcserver")
+	n.name(0x03, "SpawnX"); n.i32(spawnX)
+	n.name(0x03, "SpawnY"); n.i32(spawnY)
+	n.name(0x03, "SpawnZ"); n.i32(spawnZ)
+	n.name(0x04, "RandomSeed"); n.i64(seed)
+	n.name(0x04, "Time"); n.i64(time)
+	n.name(0x04, "DayTime"); n.i64(time)
+	n.name(0x01, "hardcore"); n.byteAt(0)
+	n.name(0x01, "MapFeatures"); n.byteAt(1)
+	n.name(0x03, "version"); n.i32(19133) // Anvil 版本号
+	n.name(0x08, "Status"); n.str("minecraft:full")
+	n.end()
+	n.end()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	gw.Write(n.buf.Bytes())
+	gw.Close()
+	return buf.Bytes()
 }

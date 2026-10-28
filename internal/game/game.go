@@ -336,11 +336,15 @@ func (g *Game) saveAll() {
 		for k, v := range canon {
 			inv[v] = k
 		}
-		if n, err := g.world.SaveAnvil(g.Cfg.SaveDir, canon, inv); err != nil {
+		if n, err := g.world.SaveAnvilBE(g.Cfg.SaveDir, canon, inv, g.exportBlockEntities()); err != nil {
 			log.Printf("[game] Anvil 存档失败: %v", err)
 		} else if n > 0 {
 			log.Printf("[game] Anvil 存档 %d 个区块", n)
 		}
+		// level.dat（官方工具识别用）
+		world.SetBEItemNames(g.itemNameCache)
+		_ = os.WriteFile(filepath.Join(g.Cfg.SaveDir, "level.dat"),
+			world.WriteLevelDat(int32(g.Cfg.SpawnX), int32(g.Cfg.SpawnY), int32(g.Cfg.SpawnZ), g.Cfg.WorldSeed, g.worldAge), 0o644)
 	}
 	if n, err := g.world.Save(g.Cfg.SaveDir); err != nil {
 		log.Printf("[game] 世界存档失败: %v", err)
