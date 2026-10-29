@@ -117,14 +117,20 @@ func (g *Game) tickMobs() {
 				dx, dz := target.X-m.x, target.Z-m.z
 				d := math.Sqrt(dx*dx + dz*dz)
 				if d > 1.4 {
-					m.x += dx / d * m.kind.speed
-					m.z += dz / d * m.kind.speed
+					nx, nz := m.x+dx/d*m.kind.speed, m.z+dz/d*m.kind.speed
+					// 前方一格被挡：尝试跳上台阶（上方两格需空）
+					if g.blockAt(floorI(nx), floorI(m.y)+0, floorI(nz)) &&
+						!g.blockAt(floorI(nx), floorI(m.y)+1, floorI(nz)) &&
+						!g.blockAt(floorI(nx), floorI(m.y)+2, floorI(nz)) {
+						m.vy = 0.42 // 原版跳跃初速
+					}
+					m.x, m.z = nx, nz
 				}
 				m.tx, m.tz = target.X, target.Z
 				if m.attackCd > 0 {
 					m.attackCd--
 				} else if d < 1.6 && abs32(int32(target.Y-m.y)) <= 2 {
-					g.damage(target, m.kind.damage, damageGeneric)
+					g.damage(target, m.kind.damage, damageMobAttack)
 					m.attackCd = 20 // 每秒一次
 				}
 			}
@@ -157,7 +163,7 @@ func (g *Game) tickMobs() {
 				}
 			}
 		}
-		// 物理：击退衰减 + 重力贴地
+		// 物理：击退衰减 + 重力贴地（vy>0 为跳跃/击退上升段）
 		m.x += m.vx
 		m.z += m.vz
 		m.vx *= 0.9
@@ -168,12 +174,15 @@ func (g *Game) tickMobs() {
 		if absF(m.vz) < 0.005 {
 			m.vz = 0
 		}
-		if !g.blockAt(floorI(m.x), floorI(m.y-0.1), floorI(m.z)) {
-			m.vy -= 0.08
-			m.y += m.vy
-		} else {
+		if m.vy <= 0 && g.blockAt(floorI(m.x), floorI(m.y-0.1), floorI(m.z)) {
 			m.vy = 0
 			m.y = float64(floorI(m.y-0.1)) + 1
+		} else {
+			m.vy -= 0.08
+			m.y += m.vy
+			if m.vy > 0 && g.blockAt(floorI(m.x), floorI(m.y+1.9), floorI(m.z)) {
+				m.vy = 0 // 撞头
+			}
 		}
 		if m.y < world.MinY-10 {
 			g.removeMob(m)
@@ -198,12 +207,18 @@ func (g *Game) tickMobs() {
 }
 
 // handleAttack 处理玩家攻击（serverbound attack：VarInt 目标实体）。
+// 攻击者下落中（离地且有下落距离）触发暴击：×1.5 并广播暴击粒子。
 func (g *Game) handleAttack(ev *playerAttackEvent) {
 	p := ev.p
 	if p == nil || p.Dead {
 		return
 	}
 	dmg := g.attackDamage(p) + g.enchantAttackBonus(p)
+	crit := !p.OnGround && p.FallStart != 0 && p.FallStart >= p.Y &&
+		!g.playerInWater(p)
+	if crit {
+		dmg *= 1.5
+	}
 	// 打生物
 	if m, ok := g.mobs[ev.target]; ok {
 		if dist2(p.X, p.Y, p.Z, m.x, m.y, m.z) > 36 {
@@ -219,6 +234,14 @@ func (g *Game) handleAttack(ev *playerAttackEvent) {
 		m.vx += dx / d * 0.4
 		m.vz += dz / d * 0.4
 		m.vy = 0.3
+		if crit { // 暴击粒子（entity_event 7）
+			eid := m.eid
+			for _, v := range g.players {
+				v.Send.SendPlay("minecraft:entity_event", func(w *protocol.Writer) {
+					packet.WriteEntityEvent(w, eid, 7)
+				})
+			}
+		}
 		if m.health <= 0 {
 			g.killMob(m, p)
 		} else {
@@ -235,13 +258,27 @@ func (g *Game) handleAttack(ev *playerAttackEvent) {
 	for _, other := range g.players {
 		if other.EntityID == ev.target && other.EntityID != p.EntityID &&
 			dist2(p.X, p.Y, p.Z, other.X, other.Y, other.Z) <= 36 {
+			if crit {
+				eid := other.EntityID
+				for _, v := range g.players {
+					v.Send.SendPlay("minecraft:entity_event", func(w *protocol.Writer) {
+						packet.WriteEntityEvent(w, eid, 7)
+					})
+				}
+			}
 			g.damage(other, dmg, damageGeneric)
 			return
 		}
 	}
 }
 
-// killMob 生物死亡：动画、移除、掉落。
+// playerInWater 玩家身体处于水中（暴击与摔落豁免判定）。
+func (g *Game) playerInWater(p *entity.Player) bool {
+	b := g.world.GetBlock(floorI(p.X), floorI(p.Y), floorI(p.Z))
+	return b >= world.WaterMin && b <= world.WaterMax
+}
+
+// killMob 生物死亡：动画、移除、掉落（数量按官方战利品表范围随机）。
 func (g *Game) killMob(m *mob, by *entity.Player) {
 	eid := m.eid
 	for _, v := range g.players {
@@ -253,8 +290,14 @@ func (g *Game) killMob(m *mob, by *entity.Player) {
 		})
 	}
 	delete(g.mobs, eid)
-	if itemID, ok := g.mobDrops[m.kind.name]; ok {
-		g.spawnItem(m.x, m.y+0.5, m.z, entity.Item{ID: itemID, Count: 1})
+	if d, ok := g.mobDrops[m.kind.name]; ok {
+		n := d.Min
+		if d.Max > d.Min {
+			n += rand.Int31n(d.Max - d.Min + 1)
+		}
+		if n > 0 {
+			g.spawnItem(m.x, m.y+0.5, m.z, entity.Item{ID: d.Item, Count: n})
+		}
 	}
 	if xp := mobXP[m.kind.name]; xp > 0 {
 		g.spawnXPOrb(m.x, m.y+0.5, m.z, xp)

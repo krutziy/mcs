@@ -66,7 +66,10 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		world:         world.NewManager(world.VoidGenerator{}),
 		itemBlocks:    map[int32]map[int32]uint32{777: assets.ItemBlocks(777)},
 		entityTypes:   map[int32]map[string]int32{777: assets.EntityTypes(777)},
-		blockDrops:    map[int32]map[uint32]int32{777: assets.BlockDrops(777)},
+		blockDrops:    assets.BlockDropsEx(777),
+		blockNames:    assets.BlockNames(777),
+		stacks:        assets.ItemStacks(777),
+		hardness:      assets.BlockHardness(777),
 		mineable:      map[int32]map[uint32]uint8{777: assets.MineableMask(777)},
 		pickaxes:      map[int32]map[int32]uint8{777: assets.PickaxeBits(777)},
 		items:         map[int32]*itemEntity{},
@@ -89,6 +92,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		anvils:       map[int32]*anvilSession{},
 		itemNames:     map[int32]map[int32]string{},
 		pendingBlocks: map[[3]int32]uint32{},
+		drags:         map[int32]*dragState{},
 	}
 	fs := &fakeSender{}
 	p := &entity.Player{
@@ -147,12 +151,29 @@ func TestDigSurvivalTiming(t *testing.T) {
 	if len(fs.sent) != 0 {
 		t.Fatalf("生存模式 start 不应发包，实际 %v", fs.names())
 	}
+	// 徒手挖石头需 ~225 刻（硬度 1.5 × 100 / 速度 1）；推进足够时间后再 finish
+	g.tick += 300
 	g.handleDig(&blockDigEvent{p: p, act: packet.PlayerAction{Status: packet.DigFinish, X: 8, Y: -60, Z: 8, Sequence: 2}})
 	if got := g.world.GetBlock(8, -60, 8); got != world.StateAir {
 		t.Fatal("生存模式 finish 应破坏方块")
 	}
 	if fs.find("minecraft:block_changed_ack") == nil {
 		t.Error("finish 后应回 ack")
+	}
+}
+
+// TestDigTooFastRejected 挖掘时长校验：start 后立即 finish（不足预期 80%）回滚。
+func TestDigTooFastRejected(t *testing.T) {
+	g, p, fs := newTestGame(packet.ModeSurvival)
+	g.world.SetBlock(8, -60, 8, world.StateStone)
+
+	g.handleDig(&blockDigEvent{p: p, act: packet.PlayerAction{Status: packet.DigStart, X: 8, Y: -60, Z: 8}})
+	g.handleDig(&blockDigEvent{p: p, act: packet.PlayerAction{Status: packet.DigFinish, X: 8, Y: -60, Z: 8, Sequence: 2}})
+	if got := g.world.GetBlock(8, -60, 8); got != world.StateStone {
+		t.Fatal("过快 finish 不应破坏方块")
+	}
+	if fs.find("minecraft:block_update") == nil {
+		t.Error("过快 finish 应回滚权威 block_update")
 	}
 }
 

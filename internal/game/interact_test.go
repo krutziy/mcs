@@ -620,7 +620,7 @@ func TestBrewingAndDrink(t *testing.T) {
 	p.Cursor = entity.Item{ID: itemPotion, Count: 1}
 	p.PotionOf[[2]int32{-1, 0}] = "strength"
 	p.Slots[36] = entity.Item{}
-	leftClickSlot(p, 36)
+	g.leftClickSlot(p, 36)
 	if p.PotionOf[[2]int32{36, 0}] != "strength" || p.Slots[36].ID != itemPotion {
 		t.Fatalf("药水名记账应迁移: %+v %v", p.Slots[36], p.PotionOf)
 	}
@@ -664,7 +664,7 @@ func TestEnchantTable(t *testing.T) {
 	p.EnchSlots[1] = entity.Item{ID: itemLapis, Count: 3}
 	p.Level = 5
 	g.applyEnchant(p, 1)
-	if len(p.EnchItem) == 0 {
+	if len(p.EnchSlots[0].Ench) == 0 {
 		t.Fatal("一档应至少附上 1 条")
 	}
 	if p.Level != 4 {
@@ -674,14 +674,16 @@ func TestEnchantTable(t *testing.T) {
 		t.Fatal("应消耗 1 青金石")
 	}
 	// 附魔应为剑类适用项
-	for _, e := range p.EnchItem {
+	for _, e := range p.EnchSlots[0].Ench {
 		info, ok := g.enchants[e.Name]
 		if !ok || e.Level < 1 || e.Level > info.MaxLevel {
 			t.Fatalf("附魔非法: %+v", e)
 		}
 	}
-	// 锋利加成路径
-	p.EnchItem = append(p.EnchItem, entity.EnchEntry{Name: "sharpness", Level: 5})
+	// 锋利加成路径（手持已附魔的剑）
+	p.Slots[36] = p.EnchSlots[0]
+	p.EnchSlots[0] = entity.Item{}
+	p.Slots[36].Ench = append(p.Slots[36].Ench, entity.EnchEntry{Name: "sharpness", Level: 5})
 	if b := g.enchantAttackBonus(p); b < 3 {
 		t.Fatalf("锋利 V 加成应 ≥3: %.1f", b)
 	}
@@ -971,19 +973,22 @@ func TestAnvilRepairAndMerge(t *testing.T) {
 	p.Cursor = entity.Item{}
 	as.in0 = entity.Item{ID: ids["iron_sword"], Count: 1}
 	as.in1 = entity.Item{ID: ids["iron_sword"], Count: 1}
-	as.ench0 = []entity.EnchEntry{{Name: "sharpness", Level: 3}}
-	as.ench1 = []entity.EnchEntry{{Name: "sharpness", Level: 3}}
+	as.in0.Ench = []entity.EnchEntry{{Name: "sharpness", Level: 3}}
+	as.in1.Ench = []entity.EnchEntry{{Name: "sharpness", Level: 3}}
 	if !g.takeAnvilResult(p) {
 		t.Fatal("应可取合并结果")
 	}
 	found := false
-	for _, e := range p.EnchItem {
+	for _, e := range p.Cursor.Ench {
 		if e.Name == "sharpness" && e.Level == 4 {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("锋利 III+III 应得 IV: %+v", p.EnchItem)
+		t.Fatalf("锋利 III+III 应得 IV: %+v", p.Cursor.Ench)
+	}
+	if p.Cursor.Ench == nil {
+		t.Fatal("合并结果附魔应在光标物品上")
 	}
 
 	// 材料修复：钻石镐 + 钻石
@@ -996,8 +1001,8 @@ func TestAnvilRepairAndMerge(t *testing.T) {
 	}
 
 	g.closeAnvil(p)
-	if p.EnchItem == nil {
-		t.Fatal("关闭前光标/记录状态正常")
+	if p.Slots[36].ID != ids["diamond_pickaxe"] {
+		t.Fatal("关闭应退回铁砧输入物品")
 	}
 }
 

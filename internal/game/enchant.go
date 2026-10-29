@@ -2,25 +2,24 @@ package game
 
 // 附魔台：右键打开（menu enchantment=13，窗口 5），槽 0=物品、1=青金石。
 // 从点击按钮选择三档（1/2/3 级花费），按权重随机抽取适用附魔并写入
-// 物品的 enchantments 组件（组件 ID 23）。附魔生效：锋利/保护/效率等
-// 常用项在攻击/挖掘/减伤处应用。
+// 物品的 enchantments 组件（组件 ID 23）——附魔跟随物品移动/存档。
+// 生效：锋利/亡灵杀手/节肢杀手攻击加成、保护系减伤、效率挖掘提速、
+// 时运/精准采集掉落（digDrops）。
 
 import (
 	"math/rand"
 
-	"mcserver/internal/assets"
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
 )
 
 const (
-	menuEnchant    int32 = 13
-	enchTableState uint32 = 11185
-	itemLapis      int32 = 1014
+	menuEnchant      int32 = 13
+	enchTableState   uint32 = 11185
+	itemLapis        int32 = 1014
 	compEnchantments int32 = 23 // minecraft:enchantments 组件 ID
 )
-
 
 // tryOpenEnchantTable 右键附魔台。
 func (g *Game) tryOpenEnchantTable(p *entity.Player, u packet.UseItemOn) bool {
@@ -56,26 +55,18 @@ func (g *Game) closeEnchantTable(p *entity.Player) {
 // syncEnchant 同步附魔台窗口（2 槽 + 三档选项经 container_set_data/自定义不强求 UI）。
 func (g *Game) syncEnchant(p *entity.Player) {
 	slots := make([]packet.ItemSlot, 39) // 0 物品 1 青金石 2-38 物品栏
-	if p.EnchSlots[0].ID != 0 {
-		var el []packet.EnchPair
-		for _, e := range p.EnchItem {
-			el = append(el, packet.EnchPair{Name: e.Name, Level: e.Level})
-		}
-		slots[0] = packet.ItemSlot{ID: p.EnchSlots[0].ID, Count: p.EnchSlots[0].Count, EnchList: el}
-	}
+	slots[0] = itemSlotOf(p.EnchSlots[0])
 	slots[1] = packet.ItemSlot{ID: p.EnchSlots[1].ID, Count: p.EnchSlots[1].Count}
 	for i := int32(2); i <= 28; i++ {
-		s := p.Slots[9+(i-2)]
-		slots[i] = packet.ItemSlot{ID: s.ID, Count: s.Count}
+		slots[i] = itemSlotOf(p.Slots[9+(i-2)])
 	}
 	for i := int32(29); i <= 37; i++ {
-		s := p.Slots[36+(i-29)]
-		slots[i] = packet.ItemSlot{ID: s.ID, Count: s.Count}
+		slots[i] = itemSlotOf(p.Slots[36+(i-29)])
 	}
 	p.ContainerState++
 	state := p.ContainerState
 	p.Send.SendPlay("minecraft:container_set_content", func(w *protocol.Writer) {
-		packet.WriteContainerSetContentEnch(w, 5, state, slots, packet.ItemSlot{})
+		packet.WriteContainerSetContent(w, 5, state, slots, packet.ItemSlot{})
 	})
 	// 三档费用提示（属性 0/1/2 = 各档所需等级，seed 属性忽略）
 	for i, cost := range []int16{1, 2, 3} {
@@ -98,7 +89,7 @@ func (g *Game) applyEnchant(p *entity.Player, tier int32) {
 	name := g.itemNameOf(p, item.ID)
 	// 适用附魔池
 	type cand struct {
-		name  string
+		name   string
 		weight int32
 	}
 	var pool []cand
@@ -137,7 +128,7 @@ func (g *Game) applyEnchant(p *entity.Player, tier int32) {
 				if maxLv > tier {
 					lv = tier + rand.Int31n(maxLv-tier+1)
 				}
-				p.EnchItem = append(p.EnchItem, entity.EnchEntry{Name: c.name, Level: lv})
+				item.Ench = append(item.Ench, entity.EnchEntry{Name: c.name, Level: lv})
 				break
 			}
 		}
@@ -191,10 +182,25 @@ func splitComma(s string) []string {
 	return out
 }
 
-// enchantBonus 攻击附魔加成（锋利：1+0.5*(lv-1)；亡灵杀手/节肢杀手对任意 +2.5*lv 简化）。
+// enchLevel 取物品附魔等级（未附魔返回 0）。
+func enchLevel(it entity.Item, name string) int32 {
+	for _, e := range it.Ench {
+		if e.Name == name {
+			return e.Level
+		}
+	}
+	return 0
+}
+
+// heldEnchantLevel 玩家当前手持物品的附魔等级。
+func (g *Game) heldEnchantLevel(p *entity.Player, name string) int32 {
+	return enchLevel(p.Held(), name)
+}
+
+// enchantAttackBonus 攻击附魔加成（锋利：1+0.5*(lv-1)；亡灵杀手/节肢杀手 +2.5*lv 简化）。
 func (g *Game) enchantAttackBonus(p *entity.Player) float32 {
 	var bonus float32
-	for _, e := range p.EnchItem {
+	for _, e := range p.Held().Ench {
 		switch e.Name {
 		case "sharpness":
 			bonus += 1 + 0.5*float32(e.Level-1)
@@ -205,15 +211,17 @@ func (g *Game) enchantAttackBonus(p *entity.Player) float32 {
 	return bonus
 }
 
-// enchantArmorBonus 保护类附魔的额外减伤（每点 EPF 4%，保护 I=1/锋利保护类）。
+// enchantArmorBonus 保护类附魔的额外减伤（每点 EPF 4%，保护 I=1/其余保护类 ×2）。
 func (g *Game) enchantArmorBonus(p *entity.Player) float32 {
 	var epf float32
-	for _, e := range p.EnchItem {
-		switch e.Name {
-		case "protection":
-			epf += float32(e.Level)
-		case "fire_protection", "blast_protection", "projectile_protection":
-			epf += float32(e.Level) * 2
+	for i := int32(5); i <= 8; i++ {
+		for _, e := range p.Slots[i].Ench {
+			switch e.Name {
+			case "protection":
+				epf += float32(e.Level)
+			case "fire_protection", "blast_protection", "projectile_protection":
+				epf += float32(e.Level) * 2
+			}
 		}
 	}
 	if epf > 20 {
@@ -242,5 +250,23 @@ func writeEnchSlot(w *protocol.Writer, itemID, count int32, list []entity.EnchEn
 	w.VarInt(0)
 }
 
-var _ = assets.Enchants
-var _ = protocol.Writer{}
+// itemSlotOf entity.Item → packet.ItemSlot（附魔列表带过）。
+func itemSlotOf(it entity.Item) packet.ItemSlot {
+	s := packet.ItemSlot{ID: it.ID, Count: it.Count, Damage: it.Damage}
+	for _, e := range it.Ench {
+		s.EnchList = append(s.EnchList, packet.EnchPair{Name: e.Name, Level: e.Level})
+	}
+	return s
+}
+
+// enchPairsOf entity.EnchEntry → packet.EnchPair 列表。
+func enchPairsOf(list []entity.EnchEntry) []packet.EnchPair {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]packet.EnchPair, 0, len(list))
+	for _, e := range list {
+		out = append(out, packet.EnchPair{Name: e.Name, Level: e.Level})
+	}
+	return out
+}

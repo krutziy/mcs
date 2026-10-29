@@ -8,7 +8,9 @@ package game
 // 结束本地的"幽灵方块"预测）。
 
 import (
+	"math"
 	"math/rand"
+	"strings"
 
 	"mcserver/internal/assets"
 	"mcserver/internal/entity"
@@ -20,8 +22,11 @@ import (
 // levelEventBlockBreak 是方块破坏粒子 + 音效的 level_event 事件 ID。
 const levelEventBlockBreak int32 = 2001
 
-// handleDig 处理挖掘：创造模式在 start 即时破坏，其余模式在 finish 破坏
-// （客户端本地播放破坏进度动画，服务端先不做按方块类型的时长校验）。
+// digUnbreakable 表示不可破坏方块（基岩等，硬度 < 0）的预期挖掘刻。
+const digUnbreakable int32 = 1 << 30
+
+// handleDig 处理挖掘：创造模式在 start 即时破坏，生存模式在 start 记录
+// 预期挖掘时长（硬度 × 工具速度），finish 时校验耗时（<80% 视为作弊回滚）。
 func (g *Game) handleDig(ev *blockDigEvent) {
 	p := ev.p
 	if p == nil || p.Dead {
@@ -34,10 +39,36 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	start := a.Status == packet.DigStart
 	finish := a.Status == packet.DigFinish
 	if !start && !finish {
-		return // 取消 / 丢物品等：仅通知插件
+		if a.Status == packet.DigCancel {
+			p.DigActive = false // 取消挖掘
+		}
+		if a.Status == packet.ReleaseUse {
+			g.handleReleaseUse(p) // 松开右键：中断进食
+		}
+		return // 丢物品等：仅通知插件
 	}
 	if start && !g.isCreative(p) {
-		return // 生存模式 start 只开始进度，等 finish 再破坏
+		// 生存模式 start 只记录预期时长，等 finish 再破坏
+		p.DigActive = true
+		p.DigX, p.DigY, p.DigZ = a.X, a.Y, a.Z
+		p.DigTick, p.DigExpected = g.tick, g.digExpectedTicks(p, g.world.GetBlock(a.X, a.Y, a.Z))
+		return
+	}
+	if finish && !g.isCreative(p) {
+		// 挖掘时长校验：同一起点且耗时不足预期 80% → 回滚权威状态
+		if p.DigActive && p.DigX == a.X && p.DigY == a.Y && p.DigZ == a.Z {
+			p.DigActive = false
+			if p.DigExpected >= digUnbreakable {
+				g.rejectDig(p, a)
+				return
+			}
+			if elapsed := g.tick - p.DigTick; elapsed*100 < int64(p.DigExpected)*80 {
+				g.rejectDig(p, a)
+				return
+			}
+		} else {
+			p.DigActive = false
+		}
 	}
 	if !g.inDigRange(p, a.X, a.Y, a.Z) {
 		return
@@ -80,7 +111,8 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	}
 }
 
-// digDrops 依据官方 jar 战利品表生成的掉落表计算掉落（数量恒 1 的简化）。
+// digDrops 依据官方 jar 战利品表生成的掉落定义计算掉落：数量取 [min,max] 随机，
+// 时运提高上限（+等级），精准采集改掉方块本身（玻璃/矿石/草方块等）。
 // 需镐方块（mineable/pickaxe）只有手持足够材质的镐才掉落。
 // 返回的物品 ID 为 777 基准空间。
 func (g *Game) digDrops(p *entity.Player, state uint32) []entity.Item {
@@ -90,10 +122,11 @@ func (g *Game) digDrops(p *entity.Player, state uint32) []entity.Item {
 			return nil
 		}
 	}
-	item, ok := g.blockDrops[777][state]
+	d, ok := g.blockDrops[state]
 	if !ok {
 		return nil
 	}
+	// 需镐门槛先于精准采集（材质不够的镐即使精准也不掉）
 	if mask, needsPick := g.mineable[777][state]; needsPick {
 		held := g.canonItem(p, p.Held().ID)
 		bit, isPick := g.pickaxes[777][held]
@@ -101,7 +134,104 @@ func (g *Game) digDrops(p *entity.Player, state uint32) []entity.Item {
 			return nil
 		}
 	}
-	return []entity.Item{{ID: item, Count: 1}}
+	if g.heldEnchantLevel(p, "silk_touch") > 0 && d.Silk != 0 {
+		return []entity.Item{{ID: d.Silk, Count: 1}}
+	}
+	if d.Item == 0 {
+		return nil
+	}
+	maxN := d.Max
+	if d.Fortune {
+		if fl := g.heldEnchantLevel(p, "fortune"); fl > 0 {
+			maxN = d.Max + fl
+		}
+	}
+	n := d.Min
+	if maxN > d.Min {
+		n += rand.Int31n(maxN - d.Min + 1)
+	}
+	if n <= 0 {
+		return nil
+	}
+	return []entity.Item{{ID: d.Item, Count: n}}
+}
+
+// digExpectedTicks 按方块硬度与手持工具计算预期挖掘刻数（原版公式近似）：
+// 伤害/刻 = 工具速度倍率 / 硬度；可采 = ceil(硬度×30/伤害)，不可采 ×100/30。
+// 效率附魔按 等级²+1 叠加；硬度 0 即时破坏；硬度 < 0（基岩）不可破坏。
+func (g *Game) digExpectedTicks(p *entity.Player, state uint32) int32 {
+	name := g.blockNames[state]
+	h, ok := g.hardness[name]
+	if !ok {
+		h = 1 // 未知方块按泥土/石头之间
+	}
+	if h < 0 {
+		return 1 << 30 // 不可破坏（正常客户端挖不动）
+	}
+	if h == 0 {
+		return 0
+	}
+	heldName := g.itemNameOf(p, p.Held().ID)
+	speed := toolSpeed(heldName)
+	if lv := g.heldEnchantLevel(p, "efficiency"); lv > 0 {
+		speed += float64(lv*lv) + 1
+	}
+	canHarvest := true
+	if mask, needsPick := g.mineable[777][state]; needsPick {
+		held := g.canonItem(p, p.Held().ID)
+		bit, isPick := g.pickaxes[777][held]
+		canHarvest = isPick && mask&(1<<bit) != 0
+	}
+	base := h * 30
+	if !canHarvest {
+		base = h * 100
+	}
+	damage := speed / h
+	if damage <= 0 {
+		damage = 1e-6
+	}
+	ticks := int32(math.Ceil(base / damage))
+	if ticks < 1 {
+		ticks = 1
+	}
+	return ticks
+}
+
+// toolSpeed 工具材质 → 挖掘速度倍率（原版公开数值；镐/斧/锹/锄均适用）。
+func toolSpeed(itemName string) float64 {
+	switch {
+	case strings.HasPrefix(itemName, "golden_"):
+		return 12
+	case strings.HasPrefix(itemName, "netherite_"):
+		return 9
+	case strings.HasPrefix(itemName, "diamond_"):
+		return 8
+	case strings.HasPrefix(itemName, "iron_"):
+		return 6
+	case strings.HasPrefix(itemName, "copper_"):
+		return 5
+	case strings.HasPrefix(itemName, "stone_"):
+		return 4
+	case strings.HasPrefix(itemName, "wooden_"):
+		return 2
+	case itemName == "shears":
+		return 5
+	}
+	return 1
+}
+
+// rejectDig 挖掘被拒（时长不足/不可破坏）：回显权威方块状态并 ack。
+func (g *Game) rejectDig(p *entity.Player, a packet.PlayerAction) {
+	x, y, z := a.X, a.Y, a.Z
+	state := g.stateFor(p, g.world.GetBlock(x, y, z))
+	p.Send.SendPlay("minecraft:block_update", func(w *protocol.Writer) {
+		packet.WriteBlockUpdate(w, x, y, z, state)
+	})
+	if a.Sequence > 0 {
+		p.Send.SendPlay("minecraft:block_changed_ack", func(w *protocol.Writer) {
+			packet.WriteBlockChangedAck(w, a.Sequence)
+		})
+	}
 }
 
 // handlePlace 处理对方块使用物品（放置）：按玩家手持物品查物品→方块表，
@@ -198,10 +328,12 @@ func (g *Game) rejectPlace(p *entity.Player, u packet.UseItemOn, tx, ty, tz int3
 	}
 }
 
-// handleHeldSlot 处理 set_carried_item。
+// handleHeldSlot 处理 set_carried_item（切换手持会中断挖掘计时与进食）。
 func (g *Game) handleHeldSlot(ev *playerHeldSlotEvent) {
 	if ev.p != nil && ev.slot >= 0 && ev.slot <= 8 {
 		ev.p.HeldSlot = ev.slot
+		ev.p.DigActive = false
+		ev.p.EatTicks = -1
 	}
 }
 

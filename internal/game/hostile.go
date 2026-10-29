@@ -128,7 +128,7 @@ func (g *Game) tickArrows() {
 					continue
 				}
 				if math.Abs(p.X-sx) < 0.7 && math.Abs(p.Z-sz) < 0.7 && sy > p.Y && sy < p.Y+2.0 {
-					g.damage(p, 3, damageGeneric)
+					g.damage(p, 3, damageArrow)
 					g.removeArrow(eid)
 					removed = true
 					break
@@ -252,7 +252,7 @@ func (g *Game) explode(x, y, z float64, r int32) {
 		if d <= float64(r)+1 {
 			dmg := float32(24 * (1 - d/(float64(r)+1)))
 			if dmg > 0 {
-				g.damage(p, dmg, damageGeneric)
+				g.damage(p, dmg, damageExplosion)
 			}
 		}
 	}

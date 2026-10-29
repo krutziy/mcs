@@ -113,7 +113,7 @@ func (g *Game) takeCraftResult3(p *entity.Player, cs *craftState) bool {
 		return false
 	}
 	cur := p.Cursor
-	if cur.ID != 0 && (cur.ID != resultID || cur.Count+count > itemMaxStack) {
+	if cur.ID != 0 && (cur.ID != resultID || cur.Count+count > g.stackOf(p, cur.ID)) {
 		return false
 	}
 	if cur.ID == 0 {

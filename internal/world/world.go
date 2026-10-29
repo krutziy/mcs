@@ -42,6 +42,16 @@ const (
 	StateGravel     uint32 = 127
 )
 
+// 方块状态区间（基准 777；液体的 level/流动位组合连续排列）。
+const (
+	WaterMin uint32 = 89   // minecraft:water（16 个状态）
+	WaterMax uint32 = 104
+	LavaMin  uint32 = 105  // minecraft:lava（16 个状态）
+	LavaMax  uint32 = 120
+	FireMin  uint32 = 4931 // minecraft:fire（age×朝向共 512 个状态）
+	FireMax  uint32 = 5442
+)
+
 // ChunkStyle 描述协议版本间的区块编码差异（均经官方抓包验证）。
 type ChunkStyle struct {
 	HeightmapOrder [3]int32 // 高度图类型顺序；1.21.x: [1,5,4]，26.x: [4,5,1]

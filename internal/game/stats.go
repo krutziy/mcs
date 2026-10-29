@@ -6,16 +6,33 @@ import (
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
+	"mcserver/internal/world"
 )
 
 // ---- 生命值 / 伤害 / 重生（26.3；set_health 与 entity_event 格式经公开协议文档确认） ----
 
-// 伤害源类型 ID（damage_event 的 source type，取通用子集；generic=1 兜底）。
+// 伤害源类型 ID（damage_event 的 source type）。
+// damage_type 注册表按字母序编号（官方 26.3 jar data/minecraft/damage_type/
+// 共 51 项；官方服抓包验证 mob_attack=28）：
+//   0 arrow 1 bad_respawn_point 2 cactus 3 campfire 4 cramming 5 dragon_breath
+//   6 drown 7 dry_out 8 ender_pearl 9 explosion 10 fall 11 falling_anvil
+//   12 falling_block 13 falling_stalactite 14 fireball 15 fireworks
+//   16 fly_into_wall 17 freeze 18 generic 19 generic_kill 20 hot_floor
+//   21 in_fire 22 in_wall 23 indirect_magic 24 lava 25 lightning_bolt
+//   26 mace_smash 27 magic 28 mob_attack ... 31 on_fire 32 out_of_world
+//   ... 40 starve ...
 const (
-	damageGeneric int32 = 1
-	damageFall    int32 = 14 // minecraft:fall
-	damageStarve  int32 = 20 // minecraft:starve
-	damageVoid    int32 = 26 // minecraft:out_of_world
+	damageArrow     int32 = 0
+	damageDrown     int32 = 6
+	damageExplosion int32 = 9
+	damageFall      int32 = 10
+	damageGeneric   int32 = 18
+	damageInFire    int32 = 21
+	damageLava      int32 = 24
+	damageMobAttack int32 = 28
+	damageOnFire    int32 = 31
+	damageVoid      int32 = 32
+	damageStarve    int32 = 40
 )
 
 // syncHealth 同步玩家的生命/食物/饱和。
@@ -67,6 +84,9 @@ func (g *Game) sendDamageVisual(p *entity.Player, sourceType int32) {
 // killPlayer 死亡：广播死亡动画（entity_event 3），标记待重生。
 func (g *Game) killPlayer(p *entity.Player) {
 	p.Dead = true
+	p.EatTicks = -1
+	p.DigActive = false
+	p.FireTicks = 0
 	g.dropInventoryOnDeath(p)
 	eid := p.EntityID
 	for _, other := range g.players {
@@ -85,7 +105,8 @@ func (g *Game) handleRespawn(p *entity.Player) {
 		return
 	}
 	p.Dead = false
-	p.Health, p.Food, p.Saturation = 20, 20, 5
+	p.Health, p.Food, p.Saturation, p.Air = 20, 20, 5, maxAirSupply
+	p.FireTicks = 0
 	sess := g.sessionOf(p)
 	showTail := sess != nil && sess.ver.LoginTrailingByte
 	p.Send.SendPlay("minecraft:respawn", func(w *protocol.Writer) {
@@ -109,10 +130,138 @@ func (g *Game) handleRespawn(p *entity.Player) {
 	})
 	g.syncHealth(p)
 	g.syncInventory(p)
+	g.syncAirSupply(p)
 	if sess != nil {
 		g.sendChunks(sess, p, int32(x)>>4, int32(z)>>4)
 	}
 	log.Printf("[game] %s 重生", p.Name)
+}
+
+// ---- 环境伤害：溺水 / 火焰 / 岩浆（每刻推进） ----
+
+const (
+	maxAirSupply      int32 = 300          // 氧气满值（刻）
+	lavaFireTicks     int32 = 300          // 岩浆离场后的燃烧时长
+	fireBlockFireTick int32 = 160          // 火焰方块离场后的燃烧时长（8 秒）
+)
+
+// tickEnvironmental 每刻推进：氧气（头部浸水递减/出水恢复+溺水伤害）、
+// 火焰与岩浆伤害、燃烧计时（入水/雨天熄灭）。
+func (g *Game) tickEnvironmental() {
+	for _, p := range g.players {
+		if p.Dead || g.isCreative(p) {
+			continue
+		}
+		eye := g.world.GetBlock(floorI(p.X), floorI(p.Y+1.62), floorI(p.Z))
+		body := g.world.GetBlock(floorI(p.X), floorI(p.Y), floorI(p.Z))
+		feet := g.world.GetBlock(floorI(p.X), floorI(p.Y+0.2), floorI(p.Z))
+		submerged := eye >= world.WaterMin && eye <= world.WaterMax
+		inWater := submerged || (body >= world.WaterMin && body <= world.WaterMax)
+		inLava := (feet >= world.LavaMin && feet <= world.LavaMax) ||
+			(eye >= world.LavaMin && eye <= world.LavaMax)
+		inFireBlock := eye >= world.FireMin && eye <= world.FireMax ||
+			feet >= world.FireMin && feet <= world.FireMax
+
+		fireResist := p.Effects["fire_resistance"] > 0
+
+		// --- 氧气与溺水 ---
+		prevAir := p.Air
+		if submerged {
+			if p.Effects["water_breathing"] <= 0 && p.Air > 0 {
+				p.Air--
+			}
+			if p.Air <= 0 && g.tick%20 == 0 {
+				g.damage(p, 2, damageDrown)
+			}
+		} else if p.Air < maxAirSupply {
+			p.Air += 4
+			if p.Air > maxAirSupply {
+				p.Air = maxAirSupply
+			}
+		}
+		if p.Air != prevAir && (p.Air == maxAirSupply || p.Air%20 == 0) {
+			g.syncAirSupply(p)
+		}
+
+		// --- 着火与岩浆 ---
+		switch {
+		case inLava:
+			if !fireResist {
+				p.FireTicks = lavaFireTicks
+				if g.tick%10 == 0 {
+					g.damage(p, 4, damageLava)
+				}
+			}
+		case inFireBlock:
+			if !fireResist {
+				p.FireTicks = fireBlockFireTick
+				if g.tick%10 == 0 {
+					g.damage(p, 1, damageInFire)
+				}
+			}
+		case inWater || (g.raining && g.skyVisible(p)):
+			// 水中/雨中熄灭
+			if p.FireTicks != 0 {
+				p.FireTicks = 0
+				g.sendFireState(p, false)
+			}
+		}
+		if p.FireTicks > 0 {
+			if p.FireTicks%20 == 0 {
+				g.sendFireState(p, true)
+			}
+			p.FireTicks--
+			if p.FireTicks == 0 {
+				g.sendFireState(p, false)
+			}
+			if !fireResist && p.FireTicks%10 == 0 {
+				g.damage(p, 1, damageOnFire)
+			}
+		}
+	}
+}
+
+// skyVisible 玩家头顶 24 格内无实体方块（雨中熄火判定，简化）。
+func (g *Game) skyVisible(p *entity.Player) bool {
+	x, z := floorI(p.X), floorI(p.Z)
+	for dy := int32(2); dy < 26; dy++ {
+		if g.blockAt(x, floorI(p.Y)+dy, z) {
+			return false
+		}
+	}
+	return true
+}
+
+// syncAirSupply 同步氧气余量（实体元数据 index 1 = VarInt）。
+func (g *Game) syncAirSupply(p *entity.Player) {
+	eid, air := p.EntityID, p.Air
+	for _, other := range g.players {
+		other.Send.SendPlay("minecraft:set_entity_data", func(w *protocol.Writer) {
+			w.VarInt(eid)
+			w.Uint8(1)    // index 1 = air supply
+			w.VarInt(1)   // 类型 VarInt
+			w.VarInt(air)
+			w.Uint8(0xFF) // 元数据终止
+		})
+	}
+}
+
+// sendFireState 广播燃烧视觉（实体基础标志 index 0 的 0x01 位）。
+func (g *Game) sendFireState(p *entity.Player, burning bool) {
+	eid := p.EntityID
+	for _, other := range g.players {
+		other.Send.SendPlay("minecraft:set_entity_data", func(w *protocol.Writer) {
+			w.VarInt(eid)
+			w.Uint8(0)    // index 0 = 基础标志
+			w.VarInt(0)   // 类型 Byte
+			flag := byte(0)
+			if burning {
+				flag = 0x01
+			}
+			w.Int8(int8(flag))
+			w.Uint8(0xFF)
+		})
+	}
 }
 
 // tickStats 每 80 刻（4 秒）推进：回血/挨饿/虚空伤害。
@@ -171,10 +320,16 @@ func (g *Game) trackFall(p *entity.Player, y float64, onGround bool) {
 		return
 	}
 	if p.FallStart != 0 {
-		dmg := int32(p.FallStart-y) - 3
-		if dmg > 0 {
-			g.damage(p, float32(dmg), damageFall)
+		// 落水免除摔落伤害
+		body := g.world.GetBlock(floorI(p.X), floorI(p.Y), floorI(p.Z))
+		if body < world.WaterMin || body > world.WaterMax {
+			dmg := int32(p.FallStart-y) - 3
+			if dmg > 0 {
+				g.damage(p, float32(dmg), damageFall)
+			}
 		}
 		p.FallStart = 0
 	}
 }
+
+var _ = protocol.Position{}

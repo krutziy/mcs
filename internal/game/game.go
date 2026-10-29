@@ -55,14 +55,16 @@ type Game struct {
 	// 各版本数据表（物品→方块 / 实体类型 / 掉落 / 工具门槛；世界统一 777 状态空间）
 	itemBlocks    map[int32]map[int32]uint32
 	entityTypes   map[int32]map[string]int32
-	blockDrops    map[int32]map[uint32]int32
 	mineable      map[int32]map[uint32]uint8
 	pickaxes      map[int32]map[int32]uint8
 	itemToCanon   map[int32]map[int32]int32 // 玩家协议物品 ID → 777 基准 ID（反向翻译表）
 	itemNames     map[int32]map[int32]string // 玩家协议物品 ID → 物品短名（进食判定）
 	items         map[int32]*itemEntity     // 掉落物实体（item.ID 恒为 777 基准）
 	mobs          map[int32]*mob           // 生物实体
-	mobDrops      map[string]int32         // 生物 → 掉落物品（777 基准）
+	mobDrops      map[string]assets.MobDrop // 生物 → 掉落（777 基准）
+	blockDrops    map[uint32]assets.BlockDrop // 方块状态 → 掉落定义（777 基准）
+	stacks        map[string]int32           // 物品短名 → 最大堆叠（777 基准）
+	hardness      map[string]float64         // 方块短名 → 硬度
 	recipes      []craftRecipe           // 合成配方（基准版本）
 	itemTags     map[string]map[string]bool // 物品标签（配方匹配用）
 	crafting     map[int32]*craftState     // 打开中的工作台（按玩家 EID）
@@ -96,6 +98,7 @@ type Game struct {
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
+	drags         map[int32]*dragState     // 进行中的容器拖拽（玩家 EID → 状态）
 
 	closed atomic.Bool
 }
@@ -131,13 +134,17 @@ func New(cfg Config, suite *version.Suite) *Game {
 		clockID:        1,
 		itemBlocks:     map[int32]map[int32]uint32{},
 		entityTypes:    map[int32]map[string]int32{},
-		blockDrops:     map[int32]map[uint32]int32{},
 		mineable:       map[int32]map[uint32]uint8{},
 		pickaxes:       map[int32]map[int32]uint8{},
 		itemToCanon:    map[int32]map[int32]int32{},
 		itemNames:      map[int32]map[int32]string{},
 		pendingBlocks:  map[[3]int32]uint32{},
+		drags:          map[int32]*dragState{},
 	}
+	g.blockDrops = assets.BlockDropsEx(777)
+	g.mobDrops = assets.MobDropsEx(777)
+	g.stacks = assets.ItemStacks(777)
+	g.hardness = assets.BlockHardness(777)
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
 	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
 	g.world = world.NewManager(g.gen)
@@ -145,7 +152,6 @@ func New(cfg Config, suite *version.Suite) *Game {
 		p := int32(v.Protocol)
 		g.itemBlocks[p] = assets.ItemBlocks(p)
 		g.entityTypes[p] = assets.EntityTypes(p)
-		g.blockDrops[p] = assets.BlockDrops(p)
 		g.mineable[p] = assets.MineableMask(p)
 		g.pickaxes[p] = assets.PickaxeBits(p)
 		if im := assets.ItemMap(p); len(im) > 0 {
@@ -162,27 +168,25 @@ func New(cfg Config, suite *version.Suite) *Game {
 			}
 			g.itemNames[p] = rev
 		}
-		if md := assets.MobDrops(p); len(md) > 0 {
-			g.mobDrops = md
-		}
-		if rs := loadRecipes(p); len(rs) > 0 {
-			g.recipes = rs
-		}
-		if tg := assets.ItemTags(p); len(tg) > 0 {
-			g.itemTags = tg
-		}
-		if ec := assets.Enchants(p); len(ec) > 0 {
-			g.enchants = ec
-		}
-		if bw := assets.Brewing(p); len(bw) > 0 {
-			g.brewing = bw
-		}
-		if sm := assets.Smelting(p); len(sm) > 0 {
-			g.smelting = sm
-		}
 		if bn := assets.BlockNames(p); len(bn) > 0 {
 			g.blockNames = bn
 		}
+	}
+	// 777 基准数据表（配方/标签/附魔/酿造/冶炼——各版本同名数据一致）
+	if rs := loadRecipes(777); len(rs) > 0 {
+		g.recipes = rs
+	}
+	if tg := assets.ItemTags(777); len(tg) > 0 {
+		g.itemTags = tg
+	}
+	if ec := assets.Enchants(777); len(ec) > 0 {
+		g.enchants = ec
+	}
+	if bw := assets.Brewing(777); len(bw) > 0 {
+		g.brewing = bw
+	}
+	if sm := assets.Smelting(777); len(sm) > 0 {
+		g.smelting = sm
 	}
 	// 775 无官方报告：借用相邻 776 的表
 	if g.entityTypes[775] == nil {
@@ -311,6 +315,8 @@ func (g *Game) tickNow() {
 	g.tickCrops()
 	g.tickBrewings()
 	g.tickEffects()
+	g.tickEnvironmental()
+	g.tickEating()
 	g.tickRedstone()
 	g.tickPistons()
 	g.tickComparators()
@@ -547,7 +553,7 @@ func (g *Game) handleJoin(s *Session) {
 		SeaLevel:            -63,
 		TailApplies:         s.ver.LoginTrailingByte, // 26.3 起末尾多一个布尔
 	}
-	p.Health, p.Food, p.Saturation = 20, 20, 5
+	p.Health, p.Food, p.Saturation, p.Air, p.EatTicks = 20, 20, 5, maxAirSupply, -1
 	p.GameMode = int32(g.Cfg.GameMode)
 	p.Effects, p.EffectAmp, p.PotionOf = map[string]int32{}, map[string]int32{}, map[[2]int32]string{}
 	s.SendPlay("minecraft:login", func(w *protocol.Writer) {
@@ -697,6 +703,7 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 		g.closeAnvil(p)
 	}
 	delete(g.players, p.EntityID)
+	delete(g.drags, p.EntityID)
 	g.count.Store(int32(len(g.players)))
 	if g.Cfg.SaveDir != "" {
 		g.savePlayer(p) // 离线即保存玩家状态
@@ -843,7 +850,7 @@ func (g *Game) handleCommand(ev *playerCommandEvent) {
 		}
 		for count > 0 {
 			n := min32(itemMaxStack, count)
-			g.giveItem(p, entity.Item{ID: id777, Count: n})
+			g.giveItem(p, entity.Item{ID: g.itemFor(p, id777), Count: n})
 			count -= n
 		}
 		reply("§7已给予 %s ×%d", ev.Args[0], countOrOne(ev.Args))

@@ -48,24 +48,61 @@ func WriteSlotDamage(w *protocol.Writer, itemID, count, damage int32) {
 	w.VarInt(0) // 移除组件数
 }
 
+// WriteItemSlotSmart 写入带全部已填组件的物品 Slot 字段：
+// damage(3) / enchantments(23) / potion_contents(26)，按存在与否增补。
+func WriteItemSlotSmart(w *protocol.Writer, s ItemSlot) {
+	w.Bool(true)
+	w.VarInt(s.ID)
+	w.VarInt(s.Count)
+	n := 0
+	if s.Damage > 0 {
+		n++
+	}
+	if len(s.EnchList) > 0 {
+		n++
+	}
+	if s.Potion != "" {
+		n++
+	}
+	w.VarInt(int32(n))
+	if s.Damage > 0 {
+		w.VarInt(3)
+		w.VarInt(s.Damage)
+	}
+	if len(s.EnchList) > 0 {
+		w.VarInt(23)
+		c := protocol.Compound{}
+		for _, e := range s.EnchList {
+			c["minecraft:"+e.Name] = e.Level
+		}
+		protocol.WriteNBT(w, c)
+	}
+	if s.Potion != "" {
+		w.VarInt(26)
+		writePotionContents(w, s.Potion)
+	}
+	w.VarInt(0)
+}
+
+// WriteItemSlotOrEmpty 按 ID 是否为 0 选择空 Slot 或智能组件 Slot。
+func WriteItemSlotOrEmpty(w *protocol.Writer, s ItemSlot) {
+	if s.ID == 0 {
+		WriteEmptySlot(w)
+	} else {
+		WriteItemSlotSmart(w, s)
+	}
+}
+
 // WriteContainerSetContent 写入 clientbound container_set_content：
-// VarInt 窗口 + VarInt 状态号 + 槽数组 + 光标物品。
+// VarInt 窗口 + VarInt 状态号 + 槽数组 + 光标物品（槽带全部组件）。
 func WriteContainerSetContent(w *protocol.Writer, window, state int32, slots []ItemSlot, carried ItemSlot) {
 	w.VarInt(window)
 	w.VarInt(state)
 	w.VarInt(int32(len(slots)))
 	for _, s := range slots {
-		if s.ID == 0 {
-			WriteEmptySlot(w)
-		} else {
-			WriteSlotDamage(w, s.ID, s.Count, s.Damage)
-		}
+		WriteItemSlotOrEmpty(w, s)
 	}
-	if carried.ID == 0 {
-		WriteEmptySlot(w)
-	} else {
-		WriteSlot(w, carried.ID, carried.Count)
-	}
+	WriteItemSlotOrEmpty(w, carried)
 }
 
 // ContainerClick 是 serverbound container_click 的服务端关心的字段。
@@ -97,11 +134,13 @@ func WriteSetEntityData(w *protocol.Writer, entityID int32, metadata []byte) {
 }
 
 // BuildItemEntityMetadata 构造物品实体的元数据：index 8 = Slot（类型 7）+ 终止符。
-func BuildItemEntityMetadata(itemID, count int32) []byte {
+// 物品带耐久/附魔时输出对应组件。
+func BuildItemEntityMetadata(itemID, count, damage int32, ench []EnchPair) []byte {
+	s := ItemSlot{ID: itemID, Count: count, Damage: damage, EnchList: ench}
 	w := protocol.NewWriter()
 	w.Uint8(8) // index
 	w.VarInt(7)
-	WriteSlot(w, itemID, count)
+	WriteItemSlotSmart(w, s)
 	w.Uint8(0xFF) // 元数据终止
 	return w.Bytes()
 }
@@ -161,51 +200,6 @@ func writePotionContents(w *protocol.Writer, potion string) {
 		potion = "water"
 	}
 	protocol.WriteNBT(w, protocol.Compound{"potion": "minecraft:" + potion})
-}
-
-// WriteContainerSetContentPotion 同 WriteContainerSetContent 但药水槽带组件。
-func WriteContainerSetContentPotion(w *protocol.Writer, window, state int32, slots []ItemSlot, carried ItemSlot) {
-	w.VarInt(window)
-	w.VarInt(state)
-	w.VarInt(int32(len(slots)))
-	for _, s := range slots {
-		switch {
-		case s.ID == 0:
-			WriteEmptySlot(w)
-		case s.Potion != "":
-			WriteSlotPotion(w, s.ID, s.Count, s.Potion)
-		default:
-			WriteSlotDamage(w, s.ID, s.Count, s.Damage)
-		}
-	}
-	if carried.ID == 0 {
-		WriteEmptySlot(w)
-	} else if carried.Potion != "" {
-		WriteSlotPotion(w, carried.ID, carried.Count, carried.Potion)
-	} else {
-		WriteSlotDamage(w, carried.ID, carried.Count, carried.Damage)
-	}
-}
-
-// WriteContainerSetContentEnch 同 ContainerSetContent 但槽 0 可带附魔组件。
-func WriteContainerSetContentEnch(w *protocol.Writer, window, state int32, slots []ItemSlot, carried ItemSlot) {
-	w.VarInt(window)
-	w.VarInt(state)
-	w.VarInt(int32(len(slots)))
-	for _, s := range slots {
-		if s.ID == 0 {
-			WriteEmptySlot(w)
-		} else if len(s.EnchList) > 0 {
-			WriteSlotEnch(w, s.ID, s.Count, s.EnchList)
-		} else {
-			WriteSlotDamage(w, s.ID, s.Count, s.Damage)
-		}
-	}
-	if carried.ID == 0 {
-		WriteEmptySlot(w)
-	} else {
-		WriteSlotDamage(w, carried.ID, carried.Count, carried.Damage)
-	}
 }
 
 // WriteSlotEnch 带 enchantments 组件（组件 ID 23，NBT {id:level}）的 Slot。

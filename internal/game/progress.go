@@ -244,11 +244,12 @@ func (g *Game) armorAbsorb(p *entity.Player, amount float32) float32 {
 	return amount * (1 - float32(pts)*0.04) * (1 - g.enchantArmorBonus(p))
 }
 
-// broadcastEquipment 向其他人广播玩家装备（手持 + 盔甲）。
+// broadcastEquipment 向其他人广播玩家装备（手持 + 盔甲，附魔/耐久随组件）。
 func (g *Game) broadcastEquipment(p *entity.Player) {
 	eid := p.EntityID
-	held := p.Held()
-	head, chest, legs, boots := p.Slots[5], p.Slots[6], p.Slots[7], p.Slots[8]
+	held := itemSlotOf(p.Held())
+	head, chest, legs, boots := itemSlotOf(p.Slots[5]), itemSlotOf(p.Slots[6]),
+		itemSlotOf(p.Slots[7]), itemSlotOf(p.Slots[8])
 	for _, other := range g.players {
 		if other.EntityID == eid {
 			continue
@@ -256,29 +257,17 @@ func (g *Game) broadcastEquipment(p *entity.Player) {
 		other.Send.SendPlay("minecraft:set_equipment", func(w *protocol.Writer) {
 			w.VarInt(eid)
 			w.Int8(0) // 主手
-			if held.ID == 0 {
-				packet.WriteEmptySlot(w)
-			} else {
-				packet.WriteSlot(w, held.ID, held.Count)
-			}
+			packet.WriteItemSlotOrEmpty(w, held)
 			w.Int8(5) // 头
-			writeSlotOrEmpty(w, head)
+			packet.WriteItemSlotOrEmpty(w, head)
 			w.Int8(4) // 胸
-			writeSlotOrEmpty(w, chest)
+			packet.WriteItemSlotOrEmpty(w, chest)
 			w.Int8(3) // 腿
-			writeSlotOrEmpty(w, legs)
+			packet.WriteItemSlotOrEmpty(w, legs)
 			w.Int8(2) // 靴
-			writeSlotOrEmpty(w, boots)
+			packet.WriteItemSlotOrEmpty(w, boots)
 			w.Int8(-1) // 结束
 		})
-	}
-}
-
-func writeSlotOrEmpty(w *protocol.Writer, it entity.Item) {
-	if it.ID == 0 {
-		packet.WriteEmptySlot(w)
-	} else {
-		packet.WriteSlot(w, it.ID, it.Count)
 	}
 }
 
@@ -287,6 +276,7 @@ func (g *Game) dropInventoryOnDeath(p *entity.Player) {
 	for i := range p.Slots {
 		if p.Slots[i].ID != 0 {
 			it := p.Slots[i]
+			it.ID = g.canonItem(p, it.ID) // 掉落物实体统一 777 基准
 			g.spawnItem(p.X, p.Y+0.5, p.Z, it)
 			p.Slots[i] = entity.Item{}
 		}

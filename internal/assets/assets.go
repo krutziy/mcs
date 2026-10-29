@@ -99,29 +99,131 @@ func ItemIDs(proto int32) map[string]int32 {
 	return loadTextTable(proto, "itemid")
 }
 
-// MobDrops 返回生物掉落表（短名 → 掉落物品网络 ID，777 基准空间）。
+// MobDrop 是一个生物的掉落定义（数量范围）。
+type MobDrop struct {
+	Item    int32
+	Min     int32
+	Max     int32
+}
+
+// MobDropsEx 返回生物掉落表（短名 → 掉落定义，777 基准空间）。
+func MobDropsEx(proto int32) map[string]MobDrop {
+	b, err := files.ReadFile(fmt.Sprintf("data/mobdrops_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[string]MobDrop{}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 4 {
+			continue
+		}
+		item, e1 := strconv.Atoi(fields[1])
+		min, e2 := strconv.Atoi(fields[2])
+		max, e3 := strconv.Atoi(fields[3])
+		if e1 != nil || e2 != nil || e3 != nil {
+			continue
+		}
+		m[fields[0]] = MobDrop{Item: int32(item), Min: int32(min), Max: int32(max)}
+	}
+	return m
+}
+
+// MobDrops 返回生物掉落表（短名 → 掉落物品网络 ID，777 基准空间；旧格式兼容）。
 func MobDrops(proto int32) map[string]int32 {
-	return loadTextTable(proto, "mobdrops")
+	m := map[string]int32{}
+	for k, d := range MobDropsEx(proto) {
+		m[k] = d.Item
+	}
+	return m
 }
 
 // BlockDrops 返回方块默认状态 → 掉落物品网络 ID（cmd/gendrops 生成，仅基准版本）。
+// 仅无数量范围的旧格式；新代码用 BlockDropsEx。
 func BlockDrops(proto int32) map[uint32]int32 {
+	m := map[uint32]int32{}
+	for s, d := range BlockDropsEx(proto) {
+		if d.Item != 0 {
+			m[s] = d.Item
+		}
+	}
+	return m
+}
+
+// BlockDrop 是一个方块状态的掉落定义（数量范围 + 时运/精准采集）。
+type BlockDrop struct {
+	Item    int32  // 常规掉落物品（0 = 仅精准采集掉落）
+	Min     int32  // 数量下限
+	Max     int32  // 数量上限
+	Fortune bool   // 时运提高数量
+	Silk    int32  // 精准采集掉落物品（0 = 无）
+}
+
+// BlockDropsEx 返回方块状态 → 掉落定义（cmd/gendrops 生成，仅基准版本）。
+func BlockDropsEx(proto int32) map[uint32]BlockDrop {
 	b, err := files.ReadFile(fmt.Sprintf("data/blockdrops_%d.txt", proto))
 	if err != nil {
 		return nil
 	}
-	m := map[uint32]int32{}
+	m := map[uint32]BlockDrop{}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 6 {
+			continue
+		}
+		state, e1 := strconv.ParseUint(fields[0], 10, 32)
+		item, e2 := strconv.Atoi(fields[1])
+		min, e3 := strconv.Atoi(fields[2])
+		max, e4 := strconv.Atoi(fields[3])
+		flags, e5 := strconv.Atoi(fields[4])
+		if e1 != nil || e2 != nil || e3 != nil || e4 != nil || e5 != nil {
+			continue
+		}
+		d := BlockDrop{Item: int32(item), Min: int32(min), Max: int32(max), Fortune: flags&1 != 0}
+		if fields[5] != "-" {
+			if silk, err := strconv.Atoi(fields[5]); err == nil {
+				d.Silk = int32(silk)
+			}
+		}
+		m[uint32(state)] = d
+	}
+	return m
+}
+
+// ItemStacks 返回物品短名 → 最大堆叠（cmd/gendrops 从官方 components 报告生成）。
+func ItemStacks(proto int32) map[string]int32 {
+	b, err := files.ReadFile(fmt.Sprintf("data/itemstack_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[string]int32{}
 	for _, line := range strings.Split(string(b), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
 			continue
 		}
-		state, err1 := strconv.Atoi(fields[0])
-		item, err2 := strconv.Atoi(fields[1])
-		if err1 != nil || err2 != nil {
+		if v, err := strconv.Atoi(fields[1]); err == nil {
+			m[fields[0]] = int32(v)
+		}
+	}
+	return m
+}
+
+// BlockHardness 返回方块短名 → 硬度（-1 = 不可破坏；Prismarine 公开数据）。
+func BlockHardness(proto int32) map[string]float64 {
+	b, err := files.ReadFile(fmt.Sprintf("data/blockhardness_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[string]float64{}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
 			continue
 		}
-		m[uint32(state)] = int32(item)
+		if v, err := strconv.ParseFloat(fields[1], 64); err == nil {
+			m[fields[0]] = v
+		}
 	}
 	return m
 }

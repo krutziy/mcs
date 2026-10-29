@@ -144,7 +144,7 @@ func (g *Game) tickFurnaces() {
 		if name := g.itemNameOf777(fs.input.ID); name != "" {
 			if res := g.smelting[name]; res != "" {
 				outID = assets.ItemIDs(777)[res]
-				canSmelt = fs.output.ID == 0 || (fs.output.ID == outID && fs.output.Count < itemMaxStack)
+				canSmelt = fs.output.ID == 0 || (fs.output.ID == outID && fs.output.Count < g.stackOf777(outID))
 			}
 		}
 		wasBurning := fs.burn > 0

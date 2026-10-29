@@ -1,35 +1,30 @@
 package game
 
-// 铁砧：右键打开（menu anvil=最后 generic 9x3? 用 menu 注册表 anvil——
-// 查得 id 待定；先复用 generic_9x3 容器布局），双输入槽 + 输出槽。
-// 功能：同物品合并修复（消耗经验）、附魔合并（两件附魔道具合并取高/相加）、
+// 铁砧：右键打开（menu anvil=12），双输入槽 + 输出槽。
+// 功能：同物品合并修复（消耗经验）、附魔合并（两件附魔道具合并取高/同级+1）、
 // 重命名（第三槽预览由客户端本地完成，取出时应用 Cursor 名字记账）。
+// 附魔跟随物品（entity.Item.Ench），合并结果直接写入预览物品。
 
 import (
 	"strings"
 
-	"mcserver/internal/assets"
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
 )
 
 const (
-	anvilState     uint32 = 12962
-	chippedAnvil   uint32 = 12966
-	damagedAnvil   uint32 = 12970
-	menuAnvil      int32  = 12 // menu 注册表 anvil
-	itemNameTagID  int32  = 0  // 占位：name tag 物品后查
+	anvilState   uint32 = 12962
+	chippedAnvil uint32 = 12966
+	damagedAnvil uint32 = 12970
+	menuAnvil    int32 = 12 // menu 注册表 anvil
 )
 
 var anvilStates = map[uint32]bool{12962: true, 12966: true, 12970: true}
 
 // anvilSession 打开铁砧的会话状态（双输入）。
 type anvilSession struct {
-	in0, in1   entity.Item
-	ench0      []entity.EnchEntry // in0 的附魔记录
-	ench1      []entity.EnchEntry
-	resultEnch []entity.EnchEntry
+	in0, in1 entity.Item
 }
 
 // tryOpenAnvil 右键铁砧。
@@ -100,26 +95,31 @@ func (g *Game) anvilResult(as *anvilSession) entity.Item {
 			merged.Damage = max - remain
 			merged.Count = 1
 		}
-		// 附魔合并：同名取高，冲突项（简化）忽略
+		// 附魔合并：同名取高，同级 +1（受上限约束）
 		seen := map[string]int32{}
-		for _, e := range append(append([]entity.EnchEntry{}, as.ench0...), as.ench1...) {
+		for _, e := range as.in0.Ench {
 			if seen[e.Name] < e.Level {
 				seen[e.Name] = e.Level
 			}
 		}
-		for _, e := range as.ench1 {
-			if seen[e.Name] == e.Level { // 同级 → +1（原版规则）
-				seen[e.Name] = e.Level + 1
-				if g.enchants != nil {
-					if info, ok := g.enchants[e.Name]; ok && seen[e.Name] > info.MaxLevel {
-						seen[e.Name] = info.MaxLevel
+		for _, e := range as.in1.Ench {
+			if lv, ok := seen[e.Name]; ok {
+				if lv == e.Level { // 同级 → +1（原版规则）
+					up := e.Level + 1
+					if info, ok2 := g.enchants[e.Name]; ok2 && up > info.MaxLevel {
+						up = info.MaxLevel
 					}
+					seen[e.Name] = up
+				} else if e.Level > lv {
+					seen[e.Name] = e.Level
 				}
+			} else {
+				seen[e.Name] = e.Level
 			}
 		}
-		as.resultEnch = nil
+		merged.Ench = nil
 		for name, lv := range seen {
-			as.resultEnch = append(as.resultEnch, entity.EnchEntry{Name: name, Level: lv})
+			merged.Ench = append(merged.Ench, entity.EnchEntry{Name: name, Level: lv})
 		}
 		return merged
 	}
@@ -136,7 +136,6 @@ func (g *Game) anvilResult(as *anvilSession) entity.Item {
 			return rep
 		}
 	}
-	as.resultEnch = as.ench0
 	return out
 }
 
@@ -170,7 +169,7 @@ func (g *Game) takeAnvilResult(p *entity.Player) bool {
 		return false
 	}
 	cur := p.Cursor
-	if cur.ID != 0 && (cur.ID != result.ID || cur.Count+result.Count > itemMaxStack) {
+	if cur.ID != 0 && (cur.ID != result.ID || cur.Count+result.Count > g.stackOf(p, cur.ID)) {
 		return false
 	}
 	if cur.ID == 0 {
@@ -178,8 +177,6 @@ func (g *Game) takeAnvilResult(p *entity.Player) bool {
 	} else {
 		p.Cursor.Count += result.Count
 	}
-	// 附魔记录迁移到光标
-	p.EnchItem = as.resultEnch
 	if !g.isCreative(p) {
 		p.Level -= cost
 		if p.Level < 0 {
@@ -189,11 +186,10 @@ func (g *Game) takeAnvilResult(p *entity.Player) bool {
 	g.syncExperience(p)
 	as.in0 = entity.Item{}
 	as.in1 = entity.Item{}
-	as.resultEnch = nil
 	return true
 }
 
-// syncAnvil 同步铁砧窗口（输出槽给预览）。
+// syncAnvil 同步铁砧窗口（输出槽给预览，附魔随物品组件下发）。
 func (g *Game) syncAnvil(p *entity.Player) {
 	as, ok := g.anvils[p.EntityID]
 	if !ok {
@@ -201,30 +197,23 @@ func (g *Game) syncAnvil(p *entity.Player) {
 	}
 	preview := g.anvilResult(as)
 	slots := make([]packet.ItemSlot, 39)
-	slots[0] = packet.ItemSlot{ID: as.in0.ID, Count: as.in0.Count, Damage: as.in0.Damage}
-	slots[1] = packet.ItemSlot{ID: as.in1.ID, Count: as.in1.Count, Damage: as.in1.Damage}
+	slots[0] = itemSlotOf(as.in0)
+	slots[1] = itemSlotOf(as.in1)
 	if preview.ID != 0 {
-		var el []packet.EnchPair
-		for _, e := range as.resultEnch {
-			el = append(el, packet.EnchPair{Name: e.Name, Level: e.Level})
-		}
-		slots[2] = packet.ItemSlot{ID: preview.ID, Count: preview.Count, Damage: preview.Damage, EnchList: el}
+		slots[2] = itemSlotOf(preview)
 	}
 	for i := int32(3); i <= 29; i++ {
-		s := p.Slots[9+(i-3)]
-		slots[i] = packet.ItemSlot{ID: s.ID, Count: s.Count, Damage: s.Damage}
+		slots[i] = itemSlotOf(p.Slots[9+(i-3)])
 	}
 	for i := int32(30); i <= 38; i++ {
-		s := p.Slots[36+(i-30)]
-		slots[i] = packet.ItemSlot{ID: s.ID, Count: s.Count, Damage: s.Damage}
+		slots[i] = itemSlotOf(p.Slots[36+(i-30)])
 	}
 	p.ContainerState++
 	state := p.ContainerState
 	p.Send.SendPlay("minecraft:container_set_content", func(w *protocol.Writer) {
-		packet.WriteContainerSetContentEnch(w, 6, state, slots, packet.ItemSlot{})
+		packet.WriteContainerSetContent(w, 6, state, slots, itemSlotOf(p.Cursor))
 	})
 	// 费用提示（属性 0 = 等级费用）
-	g.anvilResult(as)
 	cost := int32(1)
 	if as.in1.ID == as.in0.ID && as.in1.ID != 0 {
 		cost = 3
@@ -232,5 +221,4 @@ func (g *Game) syncAnvil(p *entity.Player) {
 	p.Send.SendPlay("minecraft:container_set_data", func(w *protocol.Writer) {
 		packet.WriteContainerSetData(w, 6, 0, int16(cost))
 	})
-	_ = assets.ItemIDs
 }

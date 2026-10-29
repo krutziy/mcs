@@ -99,7 +99,7 @@ func (g *Game) syncBrewing(p *entity.Player, pos [3]int32) {
 	state := p.ContainerState
 	carried := packet.ItemSlot{ID: p.Cursor.ID, Count: p.Cursor.Count}
 	p.Send.SendPlay("minecraft:container_set_content", func(w *protocol.Writer) {
-		packet.WriteContainerSetContentPotion(w, 4, state, slots, carried)
+		packet.WriteContainerSetContent(w, 4, state, slots, carried)
 	})
 	// 进度：0=酿速(0-400)、1=燃料余量(0-20)
 	p.Send.SendPlay("minecraft:container_set_data", func(w *protocol.Writer) {

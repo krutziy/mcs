@@ -14,7 +14,7 @@ import (
 func newMobGame(t *testing.T) (*Game, *entity.Player, *fakeSender) {
 	t.Helper()
 	g, p, fs := newTestGame(packet.ModeSurvival)
-	g.mobDrops = assets.MobDrops(777)
+	g.mobDrops = assets.MobDropsEx(777)
 	if g.mobDrops == nil {
 		t.Fatal("mobdrops 资产缺失")
 	}

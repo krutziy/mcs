@@ -6,9 +6,10 @@ import (
 
 // Item 是玩家物品槽的最小描述（放置判定只需物品 ID 与数量）。
 type Item struct {
-	ID     int32 // 物品网络 ID（该玩家协议版本）
+	ID     int32      // 物品网络 ID（该玩家协议版本）
 	Count  int32
-	Damage int32 // 已损失耐久（0=全新；wire 上的 damage 组件）
+	Damage int32      // 已损失耐久（0=全新；wire 上的 damage 组件）
+	Ench   []EnchEntry `json:"ench,omitempty"` // 附魔列表（wire 上的 enchantments 组件）
 }
 
 // Held 返回当前手持物品（快捷栏选中槽）。
@@ -45,7 +46,6 @@ type Player struct {
 
 	// 附魔台会话状态
 	EnchSlots [2]Item // 0 物品 1 青金石
-	EnchItem  []EnchEntry
 
 	// 药水效果（效果名 → 剩余刻）与药水名记账
 	Effects   map[string]int32
@@ -66,6 +66,16 @@ type Player struct {
 	Exhaustion  float64 // 体力消耗累积（≥4 扣饱和/食物）
 	Dead        bool    // 死亡等待重生
 	FallStart   float64 // 摔落起点 y（0 = 无追踪）
+	Air         int32   // 氧气余量（300 满；头部浸水递减，0 后溺水伤害）
+	FireTicks   int32   // 燃烧剩余刻（>0 每秒火焰伤害；入水/雨熄灭）
+	EatTicks    int32   // 进食进度（32 刻 = 1.6 秒；<0 未进食）
+	EatItem     int32   // 进食中的物品快照（ID 变化则中断）
+
+	// 挖掘时长校验（生存模式 start 记录 → finish 校验）
+	DigActive   bool
+	DigX, DigY, DigZ int32
+	DigTick     int64
+	DigExpected int32
 
 	// 同步状态
 	BroadcastX, BroadcastY, BroadcastZ float64 // 上次广播给他人的位置

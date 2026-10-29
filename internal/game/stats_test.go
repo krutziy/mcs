@@ -140,6 +140,12 @@ func TestEating(t *testing.T) {
 	p.Slots[36] = entity.Item{ID: bread, Count: 2}
 
 	g.handleUseItem(&playerUseItemEvent{p: p, sequence: 9})
+	if p.Food != 10 {
+		t.Fatalf("进食开始不应立即结算: %d", p.Food)
+	}
+	for i := int32(0); i < eatDurationTicks; i++ {
+		g.tickEating()
+	}
 	if p.Food != 15 {
 		t.Fatalf("面包应 +5 食物: %d", p.Food)
 	}
