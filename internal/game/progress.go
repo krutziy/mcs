@@ -19,6 +19,7 @@ type xpOrb struct {
 	eid    int32
 	uuid   protocol.UUID
 	amount int32
+	dim    int32
 	x, y, z, vy float64
 	age    int
 }
@@ -149,9 +150,14 @@ func (g *Game) ensureDurability(p *entity.Player) {
 func (g *Game) giveXP(p *entity.Player, amount int32) {
 	p.TotalXP += amount
 	p.XPPending += amount
+	up := false
 	for p.XPPending >= xpToNext(p.Level) {
 		p.XPPending -= xpToNext(p.Level)
 		p.Level++
+		up = true
+	}
+	if up {
+		g.playSoundTo(p, SoundPlayer, "entity.player.levelup", 0.75, 1)
 	}
 	g.syncExperience(p)
 }
@@ -171,12 +177,12 @@ func (g *Game) syncExperience(p *entity.Player) {
 }
 
 // spawnXPOrb 生成经验球。
-func (g *Game) spawnXPOrb(x, y, z float64, amount int32) {
+func (g *Game) spawnXPOrb(dim int32, x, y, z float64, amount int32) {
 	eid := g.nextEID.Add(1)
-	o := &xpOrb{eid: eid, uuid: entityUUID(eid), amount: amount,
+	o := &xpOrb{eid: eid, uuid: entityUUID(eid), amount: amount, dim: dim,
 		x: x, y: y + 0.25, z: z, vy: 0.2}
 	g.orbs[eid] = o
-	for _, v := range g.chunkViewers(int32(x)>>4, int32(z)>>4) {
+	for _, v := range g.chunkViewers(dim, int32(x)>>4, int32(z)>>4) {
 		typ := g.entityTypeID(v, "experience_orb")
 		eid2, xx, yy, zz := eid, x, o.y, z
 		v.Send.SendPlay("minecraft:add_entity", func(w *protocol.Writer) {
@@ -197,7 +203,7 @@ func (g *Game) tickOrbs() {
 		if o.vy != 0 {
 			o.vy -= itemGravity
 			ny := o.y + o.vy
-			if g.blockAt(floorI(o.x), floorI(ny-0.06), floorI(o.z)) {
+			if g.blockAtDim(o.dim, floorI(o.x), floorI(ny-0.06), floorI(o.z)) {
 				ny = float64(floorI(ny-0.06)) + 1.25
 				o.vy = 0
 			}
@@ -207,12 +213,13 @@ func (g *Game) tickOrbs() {
 			continue
 		}
 		for _, p := range g.players {
-			if p.Dead {
+			if p.Dead || p.Dim != o.dim {
 				continue
 			}
 			dh := (p.X-o.x)*(p.X-o.x) + (p.Z-o.z)*(p.Z-o.z)
 			if dh < 2.25 && o.y > p.Y-1 && o.y < p.Y+2 {
 				g.giveXP(p, o.amount)
+				g.playSoundTo(p, SoundPlayer, "entity.experience_orb.pickup", 0.8, 0.9+rand.Float32()*0.4)
 				eid2, collector := eid, p.EntityID
 				for _, v := range g.players {
 					v.Send.SendPlay("minecraft:take_item_entity", func(w *protocol.Writer) {
@@ -227,8 +234,12 @@ func (g *Game) tickOrbs() {
 }
 
 func (g *Game) removeOrb(eid int32) {
+	o := g.orbs[eid]
 	delete(g.orbs, eid)
 	for _, p := range g.players {
+		if o != nil && p.Dim != o.dim {
+			continue
+		}
 		p.Send.SendPlay("minecraft:remove_entities", func(w *protocol.Writer) {
 			packet.WriteRemoveEntities(w, []int32{eid})
 		})
@@ -277,7 +288,7 @@ func (g *Game) dropInventoryOnDeath(p *entity.Player) {
 		if p.Slots[i].ID != 0 {
 			it := p.Slots[i]
 			it.ID = g.canonItem(p, it.ID) // 掉落物实体统一 777 基准
-			g.spawnItem(p.X, p.Y+0.5, p.Z, it)
+			g.spawnItem(p.Dim, p.X, p.Y+0.5, p.Z, it)
 			p.Slots[i] = entity.Item{}
 		}
 	}
@@ -288,7 +299,7 @@ func (g *Game) dropInventoryOnDeath(p *entity.Player) {
 			if n > xp {
 				n = xp
 			}
-			g.spawnXPOrb(p.X, p.Y+0.5, p.Z, n)
+			g.spawnXPOrb(p.Dim, p.X, p.Y+0.5, p.Z, n)
 			xp -= n
 		}
 	}

@@ -30,6 +30,7 @@ type Config struct {
 	WorldSeed              int64
 	SaveDir                string // 世界存档目录（空 = 不持久化）
 	Anvil                  bool   // 存档用官方 Anvil 格式（region 互操作）
+	PlayerFormat           string // 玩家档案格式：json（默认）| nbt（vanilla playerdata）
 }
 
 // Game 聚合全部游戏状态，由主循环独占访问。
@@ -51,7 +52,8 @@ type Game struct {
 	clockID  int32 // 白天时钟 ID（官方录制为 1）
 
 	gen   world.Generator
-	world *world.Manager // 服务端权威方块状态（区块缓存）
+	world *world.Manager // 主世界（维度 0）方块状态
+	dims  map[int32]*world.Manager // 各维度世界（0 主世界 / 2 下界 / 3 末地）
 	// 各版本数据表（物品→方块 / 实体类型 / 掉落 / 工具门槛；世界统一 777 状态空间）
 	itemBlocks    map[int32]map[int32]uint32
 	entityTypes   map[int32]map[string]int32
@@ -64,40 +66,42 @@ type Game struct {
 	mobDrops      map[string]assets.MobDrop // 生物 → 掉落（777 基准）
 	blockDrops    map[uint32]assets.BlockDrop // 方块状态 → 掉落定义（777 基准）
 	stacks        map[string]int32           // 物品短名 → 最大堆叠（777 基准）
+	soundIDs      map[int32]map[string]int32  // 协议 → 音效短名 → 注册表 ID
 	hardness      map[string]float64         // 方块短名 → 硬度
 	recipes      []craftRecipe           // 合成配方（基准版本）
 	itemTags     map[string]map[string]bool // 物品标签（配方匹配用）
 	crafting     map[int32]*craftState     // 打开中的工作台（按玩家 EID）
-	furnaces     map[[3]int32]*furnaceState // 熔炉状态（按方块位置）
-	openFurnace  map[int32][3]int32        // 打开中的熔炉（玩家 EID → 位置）
+	furnaces     map[[4]int32]*furnaceState // 熔炉状态（维度+方块位置）
+	openFurnace  map[int32][4]int32        // 打开中的熔炉（玩家 EID → 位置）
 	smelting     map[string]string         // 冶炼表（777 基准）
 	bedByState   map[uint32]*bedInfo       // 床状态反查
 	doorByState  map[uint32]*doorInfo      // 门状态反查
 	doorOpenFlip map[[2]uint32]uint32      // 门状态开/关互换
-	chests       map[[3]int32]*chestState  // 箱子（位置 → 27 格）
-	openChest    map[int32][3]int32        // 打开中的箱子
+	chests       map[[4]int32]*chestState  // 箱子（维度+位置 → 27 格）
+	openChest    map[int32][4]int32        // 打开中的箱子
 	fallings     map[int32]*fallingBlock   // 下落方块实体
-	waterQueue   [][3]int32                // 待流水位置
-	saplings     map[[3]int32]int32        // 树苗（位置 → 树龄）
+	waterQueue   [][4]int32                // 待流水位置（维度+坐标）
+	saplings     map[[4]int32]int32        // 树苗（维度+位置 → 树龄）
 	raining      bool                     // 天气
 	rainTimer    int                      // 雨剩余决策周期
 	orbs         map[int32]*xpOrb          // 经验球实体
 	arrows       map[int32]*arrow         // 箭矢实体
 	creepers     map[int32]*creeperFuse   // 苦力怕引信
-	leafQueue    [][3]int32               // 待枯萎判定的叶子
+	leafQueue    [][4]int32               // 待枯萎判定的叶子（维度+坐标）
 	breeds       map[int32]*breedState    // 动物繁殖状态
-	crops        map[[3]int32]int32       // 小麦作物（位置 → 种植标记）
-	brews        map[[3]int32]*brewingState // 酿造台（位置 → 状态）
-	openBrew     map[int32][3]int32        // 打开中的酿造台
+	crops        map[[4]int32]int32       // 小麦作物（维度+位置）
+	bushes       map[[4]int32]int32       // 浆果丛（维度+位置 → 年龄）
+	brews        map[[4]int32]*brewingState // 酿造台（维度+位置）
+	openBrew     map[int32][4]int32        // 打开中的酿造台
 	brewing      map[[2]string]string      // 酿造表（输入药水+材料 → 产物）
 	enchOpen     map[int32]bool           // 打开附魔台的玩家
 	enchants     map[string]assets.EnchantInfo // 附魔表
 	rsDirty      bool                     // 红石网络待重算
-	observerPulse [][4]int32                // 观察者脉冲（位置+到期刻）
+	observerPulse [][5]int32                // 观察者脉冲（维度+位置+到期刻）
 	anvils       map[int32]*anvilSession  // 打开中的铁砧
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
-	pendingBlocks map[[3]int32]uint32       // 待广播的方块变更
+	pendingBlocks map[[4]int32]uint32       // 待广播的方块变更（维度+坐标）
 	drags         map[int32]*dragState     // 进行中的容器拖拽（玩家 EID → 状态）
 
 	closed atomic.Bool
@@ -115,21 +119,22 @@ func New(cfg Config, suite *version.Suite) *Game {
 		items:          map[int32]*itemEntity{},
 		mobs:           map[int32]*mob{},
 		crafting:       map[int32]*craftState{},
-		furnaces:       map[[3]int32]*furnaceState{},
-		openFurnace:    map[int32][3]int32{},
+		furnaces:       map[[4]int32]*furnaceState{},
+		openFurnace:    map[int32][4]int32{},
 		breeds:         map[int32]*breedState{},
-		crops:          map[[3]int32]int32{},
-		brews:         map[[3]int32]*brewingState{},
-		openBrew:      map[int32][3]int32{},
+		crops:          map[[4]int32]int32{},
+		bushes:         map[[4]int32]int32{},
+		brews:         map[[4]int32]*brewingState{},
+		openBrew:      map[int32][4]int32{},
 		enchOpen:     map[int32]bool{},
 		anvils:       map[int32]*anvilSession{},
-		chests:         map[[3]int32]*chestState{},
-		openChest:      map[int32][3]int32{},
+		chests:         map[[4]int32]*chestState{},
+		openChest:      map[int32][4]int32{},
 		orbs:           map[int32]*xpOrb{},
 		arrows:         map[int32]*arrow{},
 		creepers:       map[int32]*creeperFuse{},
 		fallings:       map[int32]*fallingBlock{},
-		saplings:       map[[3]int32]int32{},
+		saplings:       map[[4]int32]int32{},
 		dayTime:        6000, // 正午
 		clockID:        1,
 		itemBlocks:     map[int32]map[int32]uint32{},
@@ -138,16 +143,25 @@ func New(cfg Config, suite *version.Suite) *Game {
 		pickaxes:       map[int32]map[int32]uint8{},
 		itemToCanon:    map[int32]map[int32]int32{},
 		itemNames:      map[int32]map[int32]string{},
-		pendingBlocks:  map[[3]int32]uint32{},
+		pendingBlocks:  map[[4]int32]uint32{},
 		drags:          map[int32]*dragState{},
 	}
 	g.blockDrops = assets.BlockDropsEx(777)
 	g.mobDrops = assets.MobDropsEx(777)
 	g.stacks = assets.ItemStacks(777)
 	g.hardness = assets.BlockHardness(777)
+	g.soundIDs = map[int32]map[string]int32{}
+	for _, v := range version.All() {
+		p := int32(v.Protocol)
+		g.soundIDs[p] = assets.Sounds(p)
+	}
+	g.soundIDs[775] = assets.Sounds(776) // 775 无报告：借用 776
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
 	g.gen = world.NewGenerator(cfg.WorldType, cfg.WorldSeed)
 	g.world = world.NewManager(g.gen)
+	g.dims = map[int32]*world.Manager{DimOverworld: g.world,
+		DimNether: world.NewManager(world.NewGenerator("nether", cfg.WorldSeed)),
+		DimEnd:    world.NewManager(world.NewGenerator("end", cfg.WorldSeed))}
 	for _, v := range version.All() {
 		p := int32(v.Protocol)
 		g.itemBlocks[p] = assets.ItemBlocks(p)
@@ -216,6 +230,26 @@ func New(cfg Config, suite *version.Suite) *Game {
 			log.Printf("[game] 世界读档失败: %v", err)
 		} else if n > 0 {
 			log.Printf("[game] 世界读档 %d 个区块", n)
+		}
+		for dim := range g.dims {
+			if dim == DimOverworld {
+				continue
+			}
+			if cfg.Anvil {
+				canon := assets.BlockNamesFull(777)
+				inv := map[string]uint32{}
+				for k, v := range canon {
+					inv[v] = k
+				}
+				if n, err := g.dims[dim].LoadAnvil(dimDir(cfg.SaveDir, dim), inv); err != nil {
+					log.Printf("[game] 维度 %d Anvil 读档失败: %v", dim, err)
+				} else if n > 0 {
+					log.Printf("[game] 维度 %d Anvil 读档 %d 个区块", dim, n)
+				}
+			}
+			if n, err := g.dims[dim].Load(dimDir(cfg.SaveDir, dim)); err == nil && n > 0 {
+				log.Printf("[game] 维度 %d 读档 %d 个区块", dim, n)
+			}
 		}
 		if tb, err := os.ReadFile(filepath.Join(cfg.SaveDir, "time.json")); err == nil {
 			var tm struct {
@@ -313,10 +347,13 @@ func (g *Game) tickNow() {
 	g.tickWeather()
 	g.tickBreeds()
 	g.tickCrops()
+	g.tickBerryBushes()
 	g.tickBrewings()
 	g.tickEffects()
 	g.tickEnvironmental()
 	g.tickEating()
+	g.tickPortals()
+	g.tickMobSounds()
 	g.tickRedstone()
 	g.tickPistons()
 	g.tickComparators()
@@ -471,6 +508,8 @@ type playerStateFile struct {
 	X        float64      `json:"x"`
 	Y        float64      `json:"y"`
 	Z        float64      `json:"z"`
+	Dim      int32        `json:"dim"`
+	DimPos   map[int32][3]float64 `json:"dimpos,omitempty"`
 	Yaw      float32      `json:"yaw"`
 	Pitch    float32      `json:"pitch"`
 	Slots    []entity.Item `json:"slots"`
@@ -484,10 +523,16 @@ func (g *Game) savePlayer(p *entity.Player) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
-	st := playerStateFile{X: p.X, Y: p.Y, Z: p.Z, Yaw: p.Yaw, Pitch: p.Pitch, Slots: p.Slots[:], HeldSlot: p.HeldSlot}
+	st := playerStateFile{X: p.X, Y: p.Y, Z: p.Z, Dim: p.Dim, DimPos: p.DimPos,
+		Yaw: p.Yaw, Pitch: p.Pitch, Slots: p.Slots[:], HeldSlot: p.HeldSlot}
 	if p.SpawnPos != [3]float64{} {
 		sp := p.SpawnPos
 		st.Spawn = &sp
+	}
+	if g.Cfg.PlayerFormat == "nbt" {
+		if err := g.savePlayerNBTFile(p, g.Cfg.SaveDir); err == nil {
+			return
+		}
 	}
 	b, err := json.Marshal(st)
 	if err != nil {
@@ -498,6 +543,10 @@ func (g *Game) savePlayer(p *entity.Player) {
 
 // loadPlayer 恢复玩家状态（无存档时保持出生点/空物品栏）。
 func (g *Game) loadPlayer(p *entity.Player) {
+	// nbt 档案优先（official 兼容导入）；无 nbt 再读 json
+	if g.loadPlayerNBTFile(p, g.Cfg.SaveDir) {
+		return
+	}
 	b, err := os.ReadFile(filepath.Join(g.Cfg.SaveDir, "players", p.Name+".json"))
 	if err != nil {
 		return
@@ -515,6 +564,12 @@ func (g *Game) loadPlayer(p *entity.Player) {
 	}
 	p.X, p.Y, p.Z = st.X, st.Y, st.Z
 	p.Yaw, p.Pitch = st.Yaw, st.Pitch
+	if _, ok := g.dims[st.Dim]; ok && st.Dim != DimOverworld {
+		p.Dim = st.Dim // 非主世界档案：恢复维度（区块在 join 时按 p.Dim 发送）
+	}
+	if st.DimPos != nil {
+		p.DimPos = st.DimPos
+	}
 }
 
 // handleJoin 完成进入世界流程并广播。
@@ -540,13 +595,13 @@ func (g *Game) handleJoin(s *Session) {
 
 	join := packet.JoinGame{
 		EntityID:            eid,
-		WorldNames:          []string{"minecraft:overworld"},
+		WorldNames:          []string{"minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"},
 		MaxPlayers:          g.Cfg.MaxPlayers,
 		ViewDistance:        g.Cfg.ViewDistance,
 		SimulationDistance:  g.Cfg.ViewDistance,
 		EnableRespawnScreen: true,
-		DimensionID:         0, // minecraft:overworld
-		WorldName:           "minecraft:overworld",
+		DimensionID:         p.Dim,
+		WorldName:           dimNames[p.Dim],
 		GameMode:            g.Cfg.GameMode,
 		PreviousGameMode:    255,
 		IsFlat:              true,
@@ -554,6 +609,7 @@ func (g *Game) handleJoin(s *Session) {
 		TailApplies:         s.ver.LoginTrailingByte, // 26.3 起末尾多一个布尔
 	}
 	p.Health, p.Food, p.Saturation, p.Air, p.EatTicks = 20, 20, 5, maxAirSupply, -1
+	p.PortalCooldown = 60 // 进服短暂冷却
 	p.GameMode = int32(g.Cfg.GameMode)
 	p.Effects, p.EffectAmp, p.PotionOf = map[string]int32{}, map[string]int32{}, map[[2]int32]string{}
 	s.SendPlay("minecraft:login", func(w *protocol.Writer) {
@@ -576,7 +632,7 @@ func (g *Game) handleJoin(s *Session) {
 	})
 
 	s.SendPlay("minecraft:set_chunk_cache_center", func(w *protocol.Writer) {
-		packet.WriteChunkCenter(w, int32(g.Cfg.SpawnX)>>4, int32(g.Cfg.SpawnZ)>>4)
+		packet.WriteChunkCenter(w, int32(p.X)>>4, int32(p.Z)>>4)
 	})
 	s.SendPlay("minecraft:set_chunk_cache_radius", func(w *protocol.Writer) {
 		packet.WriteViewDistance(w, g.Cfg.ViewDistance)
@@ -599,7 +655,7 @@ func (g *Game) handleJoin(s *Session) {
 		packet.WritePlayerInfoAdd(w, p.UUID, p.Name, g.Cfg.GameMode)
 	})
 
-	g.sendChunks(s, p, int32(g.Cfg.SpawnX)>>4, int32(g.Cfg.SpawnZ)>>4)
+	g.sendChunks(s, p, int32(p.X)>>4, int32(p.Z)>>4)
 	g.syncInventory(p) // 初始物品栏同步
 	g.syncHealth(p)    // 初始生命/食物同步
 	g.syncExperience(p)
@@ -913,9 +969,44 @@ func (g *Game) handleCommand(ev *playerCommandEvent) {
 		p.Send.SendPlay("minecraft:player_position", func(w *protocol.Writer) {
 			packet.WritePlayerPosition(w, packet.PlayerPositionOut{TeleportID: id, X: x, Y: y, Z: z})
 		})
+	case "dim":
+		if len(ev.Args) < 1 {
+			reply("§7用法: /dim <overworld|nether|end>")
+			break
+		}
+		dim, ok := dimByName(ev.Args[0])
+		if !ok {
+			reply("§c未知维度: %s", ev.Args[0])
+			break
+		}
+		if dim == p.Dim {
+			reply("§7已在 %s", ev.Args[0])
+			break
+		}
+		var x, y, z float64
+		if pos, ok := p.DimPos[dim]; ok {
+			x, y, z = pos[0], pos[1], pos[2]
+		} else if dim == DimEnd {
+			x, y, z = 100.5, float64(-64+85), 2.5
+		} else {
+			x, z = p.X, p.Z
+			if dim == DimNether {
+				x, z = p.X/8, p.Z/8
+			} else if p.Dim == DimNether {
+				x, z = p.X*8, p.Z*8
+			}
+			y = clampF(p.Y+8, float64(-64+8), float64(-64+300))
+			// 找落脚点
+			if bx, by, bz, ok := g.findSpawnSpotAt(dim, int32(x), int32(y), int32(z)); ok {
+				x, y, z = float64(bx)+0.5, float64(by), float64(bz)+0.5
+			}
+		}
+		p.PortalCooldown = 60
+		g.switchDimension(p, dim, x, y, z)
+		reply("§7已切换到 %s", ev.Args[0])
 	case "help":
 		p.Send.SendPlay("minecraft:system_chat", func(w *protocol.Writer) {
-			packet.WriteSystemChat(w, "§7可用命令: /list /spawn /gamemode /give /tp /time /kill /help", false)
+			packet.WriteSystemChat(w, "§7可用命令: /list /spawn /gamemode /give /tp /time /kill /dim /help", false)
 		})
 	default:
 		p.Send.SendPlay("minecraft:system_chat", func(w *protocol.Writer) {

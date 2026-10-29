@@ -7,6 +7,8 @@ package game
 // 物品名 → 网络 ID 按玩家协议查 itemid_<proto>.txt。
 
 import (
+	"math/rand"
+
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
@@ -109,6 +111,7 @@ func (g *Game) tickEating() {
 		if s.Count <= 0 {
 			*s = entity.Item{}
 		}
+		g.playSoundTo(p, SoundPlayer, "entity.player.burp", 0.5, 0.9+rand.Float32()*0.2)
 		g.syncHealth(p)
 		g.syncInventory(p)
 	}

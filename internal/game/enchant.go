@@ -23,7 +23,7 @@ const (
 
 // tryOpenEnchantTable 右键附魔台。
 func (g *Game) tryOpenEnchantTable(p *entity.Player, u packet.UseItemOn) bool {
-	if g.world.GetBlock(u.X, u.Y, u.Z) != enchTableState {
+	if g.w(p).GetBlock(u.X, u.Y, u.Z) != enchTableState {
 		return false
 	}
 	g.enchOpen[p.EntityID] = true
@@ -44,7 +44,7 @@ func (g *Game) closeEnchantTable(p *entity.Player) {
 	for _, it := range p.EnchSlots {
 		if it.ID != 0 {
 			if n := g.giveItem(p, it); n < it.Count {
-				g.spawnItem(p.X, p.Y+1, p.Z, entity.Item{ID: it.ID, Count: it.Count - n})
+				g.spawnItem(p.Dim, p.X, p.Y+1, p.Z, entity.Item{ID: it.ID, Count: it.Count - n})
 			}
 		}
 	}
@@ -143,6 +143,7 @@ func (g *Game) applyEnchant(p *entity.Player, tier int32) {
 	if p.EnchSlots[1].Count <= 0 {
 		p.EnchSlots[1] = entity.Item{}
 	}
+	g.playSoundTo(p, SoundBlock, "block.enchantment_table.use", 1, 1)
 	g.syncExperience(p)
 	g.syncEnchant(p)
 }

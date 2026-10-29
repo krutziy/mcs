@@ -152,9 +152,10 @@ func (g *Game) tickEnvironmental() {
 		if p.Dead || g.isCreative(p) {
 			continue
 		}
-		eye := g.world.GetBlock(floorI(p.X), floorI(p.Y+1.62), floorI(p.Z))
-		body := g.world.GetBlock(floorI(p.X), floorI(p.Y), floorI(p.Z))
-		feet := g.world.GetBlock(floorI(p.X), floorI(p.Y+0.2), floorI(p.Z))
+		g.berryBushPrickle(p)
+		eye := g.w(p).GetBlock(floorI(p.X), floorI(p.Y+1.62), floorI(p.Z))
+		body := g.w(p).GetBlock(floorI(p.X), floorI(p.Y), floorI(p.Z))
+		feet := g.w(p).GetBlock(floorI(p.X), floorI(p.Y+0.2), floorI(p.Z))
 		submerged := eye >= world.WaterMin && eye <= world.WaterMax
 		inWater := submerged || (body >= world.WaterMin && body <= world.WaterMax)
 		inLava := (feet >= world.LavaMin && feet <= world.LavaMax) ||
@@ -321,7 +322,7 @@ func (g *Game) trackFall(p *entity.Player, y float64, onGround bool) {
 	}
 	if p.FallStart != 0 {
 		// 落水免除摔落伤害
-		body := g.world.GetBlock(floorI(p.X), floorI(p.Y), floorI(p.Z))
+		body := g.w(p).GetBlock(floorI(p.X), floorI(p.Y), floorI(p.Z))
 		if body < world.WaterMin || body > world.WaterMax {
 			dmg := int32(p.FallStart-y) - 3
 			if dmg > 0 {

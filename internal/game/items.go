@@ -29,14 +29,15 @@ type itemEntity struct {
 	eid     int32
 	uuid    protocol.UUID
 	item    entity.Item
+	dim     int32
 	x, y, z float64
 	vx, vy  float64 // 水平速度仅用于散开，落地即衰减
 	vz      float64
 	age     int
 }
 
-// spawnItem 在方块位置生成一个掉落物并向区块观察者广播。
-func (g *Game) spawnItem(x, y, z float64, item entity.Item) {
+// spawnItem 在指定维度生成一个掉落物并向区块观察者广播。
+func (g *Game) spawnItem(dim int32, x, y, z float64, item entity.Item) {
 	if item.ID == 0 || item.Count <= 0 {
 		return
 	}
@@ -45,6 +46,7 @@ func (g *Game) spawnItem(x, y, z float64, item entity.Item) {
 		eid:  eid,
 		uuid: entityUUID(eid),
 		item: item,
+		dim:  dim,
 		x:    x, y: y, z: z,
 		vx:   (rand.Float64() - 0.5) * 0.2,
 		vy:   0.2,
@@ -52,7 +54,7 @@ func (g *Game) spawnItem(x, y, z float64, item entity.Item) {
 	}
 	g.items[eid] = ie
 
-	viewers := g.chunkViewers(int32(x)>>4, int32(z)>>4)
+	viewers := g.chunkViewers(dim, int32(x)>>4, int32(z)>>4)
 	for _, v := range viewers {
 		g.sendItemSpawn(v, ie)
 	}
@@ -98,10 +100,10 @@ func (g *Game) stackOf777(id int32) int32 {
 
 // tickItems 推进所有掉落物：重力/水中浮力/同物合并/拾取/消失。
 func (g *Game) tickItems() {
-	for eid, ie := range g.items {
+	for _, ie := range g.items {
 		ie.age++
 		if ie.age >= itemLifetime {
-			g.removeItem(eid)
+			g.removeItem(ie)
 			continue
 		}
 		// 简单物理：水平摩擦减速，下落直到碰到实体方块，落地后停在其上表面
@@ -128,24 +130,28 @@ func (g *Game) tickItems() {
 				ie.vz = 0
 			}
 			nx, ny, nz := ie.x+ie.vx, ie.y+ie.vy, ie.z+ie.vz
-			if hit := floorI(ny - 0.06); ie.vy < 0 && g.blockAt(floorI(nx), hit, floorI(nz)) {
+			if hit := floorI(ny - 0.06); ie.vy < 0 && g.blockAtDim(ie.dim, floorI(nx), hit, floorI(nz)) {
 				ny = float64(hit) + 1.125 // 方块上表面 + 物品半高
 				ie.vy, ie.vx, ie.vz = 0, 0, 0
 			}
 			ie.x, ie.y, ie.z = nx, ny, nz
 		}
-		// 拾取：任意在线玩家靠近（水平 1.2 格，垂直覆盖身体 ±缓冲）
+		// 拾取：同维度玩家靠近（水平 1.2 格，垂直覆盖身体 ±缓冲）
 		if ie.age < itemPickupWait {
 			continue
 		}
 		for _, p := range g.players {
+			if p.Dim != ie.dim {
+				continue
+			}
 			dh := (p.X-ie.x)*(p.X-ie.x) + (p.Z-ie.z)*(p.Z-ie.z)
 			if dh < 1.44 && ie.y > p.Y-1.0 && ie.y < p.Y+2.0 {
 				if n := g.giveItem(p, entity.Item{ID: g.itemFor(p, ie.item.ID), Count: ie.item.Count,
 				Damage: ie.item.Damage, Ench: ie.item.Ench}); n > 0 {
+					g.playSoundTo(p, SoundPlayer, "entity.item.pickup", 0.4, 0.9+rand.Float32()*0.3)
 					g.broadcastTakeItem(ie, p, n)
 					if n >= ie.item.Count {
-						g.removeItem(eid)
+						g.removeItem(ie)
 					} else {
 						ie.item.Count -= n
 					}
@@ -194,10 +200,10 @@ func (g *Game) mergeItems() {
 				}
 				// 合并到 a，移除 b，a 用元数据更新数量（无重生闪烁）
 				a.item.Count += b.item.Count
-				g.removeItem(eids[j])
+				g.removeItem(b)
 				delete(g.items, eids[j])
 				eid2 := eids[i]
-				for _, v := range g.chunkViewers(floorI(a.x)>>4, floorI(a.z)>>4) {
+				for _, v := range g.chunkViewers(a.dim, floorI(a.x)>>4, floorI(a.z)>>4) {
 					itemID := g.itemFor(v, a.item.ID)
 					meta := packet.BuildItemEntityMetadata(itemID, a.item.Count, a.item.Damage, enchPairsOf(a.item.Ench))
 					v.Send.SendPlay("minecraft:set_entity_data", func(w *protocol.Writer) {
@@ -214,16 +220,26 @@ func (g *Game) blockStateAt(x, y, z int32) uint32 {
 	return g.world.GetBlock(x, y, z)
 }
 
+// blockAtDim 指定维度的实体方块判定（物品/生物站立）。
+func (g *Game) blockAtDim(dim, x, y, z int32) bool {
+	s := g.wd(dim).GetBlock(x, y, z)
+	return s != world.StateAir && s != world.StateWater
+}
+
 // blockAt 判断世界坐标处是否为实体方块（物品站立判定，简化为非空气非水）。
 func (g *Game) blockAt(x, y, z int32) bool {
 	s := g.world.GetBlock(x, y, z)
 	return s != world.StateAir && s != world.StateWater
 }
 
-// removeItem 广播移除并删除掉落物。
-func (g *Game) removeItem(eid int32) {
-	delete(g.items, eid)
+// removeItem 广播移除并删除掉落物（同维度观察者）。
+func (g *Game) removeItem(ie *itemEntity) {
+	delete(g.items, ie.eid)
+	eid := ie.eid
 	for _, p := range g.players {
+		if p.Dim != ie.dim {
+			continue
+		}
 		p.Send.SendPlay("minecraft:remove_entities", func(w *protocol.Writer) {
 			packet.WriteRemoveEntities(w, []int32{eid})
 		})
@@ -233,6 +249,9 @@ func (g *Game) removeItem(eid int32) {
 // broadcastTakeItem 通知观察者物品被拾取（飞向玩家的动画）。
 func (g *Game) broadcastTakeItem(ie *itemEntity, collector *entity.Player, count int32) {
 	for _, p := range g.players {
+		if p.Dim != ie.dim {
+			continue
+		}
 		p.Send.SendPlay("minecraft:take_item_entity", func(w *protocol.Writer) {
 			packet.WriteTakeItemEntity(w, ie.eid, collector.EntityID, count)
 		})

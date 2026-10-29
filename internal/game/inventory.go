@@ -334,23 +334,23 @@ func (g *Game) dropFromHand(p *entity.Player, item entity.Item, spread int32) {
 	yaw := float64(p.Yaw) * math.Pi / 180
 	dirX, dirZ := -math.Sin(yaw), math.Cos(yaw)
 	if spread == 0 {
-		g.spawnItem(p.X, p.Y+1.0, p.Z, canonical)
+		g.spawnItem(p.Dim, p.X, p.Y+1.0, p.Z, canonical)
 		return
 	}
 	x, y, z := p.X+dirX*0.3, p.Y+1.4, p.Z+dirZ*0.3
-	g.spawnItemRaw(x, y, z, canonical, dirX*0.3, 0.1, dirZ*0.3)
+	g.spawnItemRaw(p.Dim, x, y, z, canonical, dirX*0.3, 0.1, dirZ*0.3)
 }
 
-// spawnItemRaw 指定速度生成掉落物（Q 键丢弃用）。
-func (g *Game) spawnItemRaw(x, y, z float64, item entity.Item, vx, vy, vz float64) {
+// spawnItemRaw 指定维度与速度生成掉落物（Q 键丢弃用）。
+func (g *Game) spawnItemRaw(dim int32, x, y, z float64, item entity.Item, vx, vy, vz float64) {
 	if item.ID == 0 || item.Count <= 0 {
 		return
 	}
 	eid := g.nextEID.Add(1)
-	ie := &itemEntity{eid: eid, uuid: entityUUID(eid), item: item,
+	ie := &itemEntity{eid: eid, uuid: entityUUID(eid), item: item, dim: dim,
 		x: x, y: y, z: z, vx: vx, vy: vy, vz: vz}
 	g.items[eid] = ie
-	for _, v := range g.chunkViewers(int32(x)>>4, int32(z)>>4) {
+	for _, v := range g.chunkViewers(dim, int32(x)>>4, int32(z)>>4) {
 		g.sendItemSpawn(v, ie)
 	}
 }

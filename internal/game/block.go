@@ -73,40 +73,44 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 	if !g.inDigRange(p, a.X, a.Y, a.Z) {
 		return
 	}
-	old := g.world.GetBlock(a.X, a.Y, a.Z)
+	old := g.w(p).GetBlock(a.X, a.Y, a.Z)
 	bus.OldState = old
 	if old == world.StateAir {
 		return
 	}
 	// 破坏粒子 + 音效（data = 被破坏方块的 ID，按观察者协议翻译），再改世界状态
-	for _, v := range g.chunkViewers(a.X>>4, a.Z>>4) {
+	if old == portalStateX || old == portalStateZ {
+		g.breakPortalCascade(p.Dim, a.X, a.Y, a.Z)
+	}
+	for _, v := range g.chunkViewers(p.Dim, a.X>>4, a.Z>>4) {
 		data := g.stateFor(v, old)
 		v.Send.SendPlay("minecraft:level_event", func(w *protocol.Writer) {
 			packet.WriteLevelEvent(w, levelEventBlockBreak, a.X, a.Y, a.Z, int32(data), false)
 		})
 	}
-	g.dropFurnaceContents([3]int32{a.X, a.Y, a.Z})
-	g.dropChestContents([3]int32{a.X, a.Y, a.Z})
-	g.dropBrewingContents([3]int32{a.X, a.Y, a.Z})
-	g.harvestWheatIfMature(a.X, a.Y, a.Z, old)
-	g.breakBedIfHit(a.X, a.Y, a.Z, old)
-	g.breakDoorIfHit(a.X, a.Y, a.Z, old)
-	g.applyBlock(a.X, a.Y, a.Z, world.StateAir, a.Sequence, p)
+	dpos := [4]int32{p.Dim, a.X, a.Y, a.Z}
+	g.dropFurnaceContents(dpos)
+	g.dropChestContents(dpos)
+	g.dropBrewingContents(dpos)
+	g.harvestWheatIfMature(p.Dim, a.X, a.Y, a.Z, old)
+	g.breakBedIfHit(p.Dim, a.X, a.Y, a.Z, old)
+	g.breakDoorIfHit(p.Dim, a.X, a.Y, a.Z, old)
+	g.applyBlock(p.Dim, a.X, a.Y, a.Z, world.StateAir, a.Sequence, p)
 	bus.Broke = true
 	g.damageHeld(p)
 	if xp, ok := oreXP[g.blockNames[old]]; ok && xp > 0 {
-		g.spawnXPOrb(float64(a.X)+0.5, float64(a.Y)+0.5, float64(a.Z)+0.5, 1+rand.Int31n(xp))
+		g.spawnXPOrb(p.Dim, float64(a.X)+0.5, float64(a.Y)+0.5, float64(a.Z)+0.5, 1+rand.Int31n(xp))
 	}
-	g.triggerGravity(a.X, a.Y+1, a.Z) // 上方重力方块塌落
-	g.scheduleWaterFlow(a.X, a.Y, a.Z) // 邻水流入
-	g.scheduleLeafCheck(a.X, a.Y, a.Z) // 周围叶子重算枯萎
-	g.scheduleRedstoneUpdate(a.X, a.Y, a.Z)
-	g.scheduleObserverCheck(a.X, a.Y, a.Z)
+	g.triggerGravity(p.Dim, a.X, a.Y+1, a.Z) // 上方重力方块塌落
+	g.scheduleWaterFlow(p.Dim, a.X, a.Y, a.Z) // 邻水流入
+	g.scheduleLeafCheck(p.Dim, a.X, a.Y, a.Z)
+	g.scheduleRedstoneUpdate(p.Dim, a.X, a.Y, a.Z)
+	g.scheduleObserverCheck(p.Dim, a.X, a.Y, a.Z)
 	// 生存模式：按掉落表生成掉落物（需镐方块还要材质门槛）
 	if !g.isCreative(p) {
 		bus.Drops = g.digDrops(p, old)
 		for _, d := range bus.Drops {
-			g.spawnItem(float64(a.X)+0.5, float64(a.Y)+0.5, float64(a.Z)+0.5, d)
+			g.spawnItem(p.Dim, float64(a.X)+0.5, float64(a.Y)+0.5, float64(a.Z)+0.5, d)
 		}
 	}
 }
@@ -242,7 +246,8 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		return
 	}
 	u := ev.use
-	if g.tryOpenCrafting(p, u) || g.tryOpenFurnace(p, u) || g.tryOpenChest(p, u) ||
+	if g.tryHarvestBerryBush(p, u) || g.tryPlantBerry(p, u) ||
+		g.tryOpenCrafting(p, u) || g.tryOpenFurnace(p, u) || g.tryOpenChest(p, u) ||
 		g.tryTill(p, u) || g.tryPlantSeed(p, u) || g.tryBonemeal(p, u) ||
 		g.tryOpenBrewing(p, u) ||
 		g.tryOpenEnchantTable(p, u) ||
@@ -259,6 +264,9 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		Face: u.Face, Sequence: u.Sequence}
 	defer func() { g.Bus.emit(bus) }()
 
+	if g.tryIgnitePortal(p, u) {
+		return
+	}
 	held := p.Held()
 	if held.ID == 0 || held.Count <= 0 {
 		g.rejectPlace(p, u, tx, ty, tz) // 空手：回显两处方块状态 + ack（官方行为）
@@ -285,20 +293,20 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	if !g.inDigRange(p, tx, ty, tz) {
 		return
 	}
-	cur := g.world.GetBlock(tx, ty, tz)
+	cur := g.w(p).GetBlock(tx, ty, tz)
 	if cur != world.StateAir && cur != world.StateWater {
 		g.rejectPlace(p, u, tx, ty, tz) // 目标被占：客户端会预测放置，需回滚
 		return
 	}
-	g.applyBlock(tx, ty, tz, state, u.Sequence, p)
+	g.applyBlock(p.Dim, tx, ty, tz, state, u.Sequence, p)
 	bus.State, bus.ItemID = state, held.ID
-	g.scheduleRedstoneUpdate(tx, ty, tz)
-	g.scheduleObserverCheck(tx, ty, tz)
+	g.scheduleRedstoneUpdate(p.Dim, tx, ty, tz)
+	g.scheduleObserverCheck(p.Dim, tx, ty, tz)
 	g.rsDirty = g.rsDirty || isRedstoneComponent(state)
 	if state == world.StateSand || state == world.StateGravel {
-		g.triggerGravity(tx, ty, tz) // 放在悬空处 → 落下
+		g.triggerGravity(p.Dim, tx, ty, tz) // 放在悬空处 → 落下
 	} else {
-		g.trackSapling(tx, ty, tz, state)
+		g.trackSapling(p.Dim, tx, ty, tz, state)
 	}
 	// 生存模式：放置消耗一个手持物品
 	if !g.isCreative(p) {
@@ -316,7 +324,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 func (g *Game) rejectPlace(p *entity.Player, u packet.UseItemOn, tx, ty, tz int32) {
 	for _, pos := range [][3]int32{{u.X, u.Y, u.Z}, {tx, ty, tz}} {
 		x, y, z := pos[0], pos[1], pos[2]
-		state := g.stateFor(p, g.world.GetBlock(x, y, z))
+		state := g.stateFor(p, g.w(p).GetBlock(x, y, z))
 		p.Send.SendPlay("minecraft:block_update", func(w *protocol.Writer) {
 			packet.WriteBlockUpdate(w, x, y, z, state)
 		})
@@ -339,14 +347,15 @@ func (g *Game) handleHeldSlot(ev *playerHeldSlotEvent) {
 
 // applyBlock 应用一次方块变更并广播：写世界 → 广播增量更新 → 光照重算
 // （含光源的变更重发整区块）→ 回 ack。
-func (g *Game) applyBlock(x, y, z int32, state uint32, sequence int32, actor *entity.Player) {
-	oldState := g.world.GetBlock(x, y, z)
-	g.world.SetBlock(x, y, z, state)
-	g.recordBlockChange(x, y, z, state)
+func (g *Game) applyBlock(dim, x, y, z int32, state uint32, sequence int32, actor *entity.Player) {
+	w := g.wd(dim)
+	oldState := w.GetBlock(x, y, z)
+	w.SetBlock(x, y, z, state)
+	g.recordBlockChange(dim, x, y, z, state)
 	g.flushBlockUpdates()
 	// 光源出现/消失时重发受影响区块（含新光照数组）
 	if world.IsLightSource(oldState) || world.IsLightSource(state) {
-		g.resendChunkWithLight(x >> 4, z >> 4)
+		g.resendChunkWithLight(dim, x >> 4, z >> 4)
 	}
 	if actor != nil && sequence > 0 {
 		actor.Send.SendPlay("minecraft:block_changed_ack", func(w *protocol.Writer) {
@@ -356,11 +365,11 @@ func (g *Game) applyBlock(x, y, z int32, state uint32, sequence int32, actor *en
 }
 
 // recordBlockChange 记入待广播缓冲（同位置多次变更以最后一次为准）。
-func (g *Game) recordBlockChange(x, y, z int32, state uint32) {
+func (g *Game) recordBlockChange(dim, x, y, z int32, state uint32) {
 	if g.pendingBlocks == nil {
-		g.pendingBlocks = map[[3]int32]uint32{}
+		g.pendingBlocks = map[[4]int32]uint32{}
 	}
-	g.pendingBlocks[[3]int32{x, y, z}] = state
+	g.pendingBlocks[[4]int32{dim, x, y, z}] = state
 }
 
 // flushBlockUpdates 把待广播的方块变更按节分组发给能看到该区块的玩家：
@@ -369,16 +378,16 @@ func (g *Game) flushBlockUpdates() {
 	if len(g.pendingBlocks) == 0 {
 		return
 	}
-	type secKey struct{ cx, sy, cz int32 }
+	type secKey struct{ dim, cx, sy, cz int32 }
 	type change struct {
 		entry   packet.SectionEntry
 		x, y, z int32
 	}
 	sections := map[secKey][]change{}
 	for pos, state := range g.pendingBlocks {
-		x, y, z := pos[0], pos[1], pos[2]
+		dim, x, y, z := pos[0], pos[1], pos[2], pos[3]
 		// 线上节 Y 是世界坐标节号（overworld 为 -4..19）；节内 y 取相对维度底部
-		k := secKey{x >> 4, y >> 4, z >> 4}
+		k := secKey{dim, x >> 4, y >> 4, z >> 4}
 		sections[k] = append(sections[k], change{
 			entry: packet.SectionEntry{LocalX: x & 15, LocalY: (y - world.MinY) & 15, LocalZ: z & 15, State: state},
 			x:     x, y: y, z: z,
@@ -386,7 +395,7 @@ func (g *Game) flushBlockUpdates() {
 	}
 	g.pendingBlocks = nil
 	for k, list := range sections {
-		viewers := g.chunkViewers(k.cx, k.cz)
+		viewers := g.chunkViewers(k.dim, k.cx, k.cz)
 		if len(viewers) == 0 {
 			continue
 		}
@@ -418,12 +427,12 @@ func (g *Game) flushBlockUpdates() {
 	}
 }
 
-// chunkViewers 返回已收到该区块且在视距内的玩家。
-func (g *Game) chunkViewers(cx, cz int32) []*entity.Player {
+// chunkViewers 返回已收到该区块且在视距内的同维度玩家。
+func (g *Game) chunkViewers(dim, cx, cz int32) []*entity.Player {
 	r := g.Cfg.ViewDistance
 	var out []*entity.Player
 	for _, p := range g.players {
-		if p.SentChunks == nil || !p.SentChunks[[2]int32{cx, cz}] {
+		if p.Dim != dim || p.SentChunks == nil || !p.SentChunks[[2]int32{cx, cz}] {
 			continue
 		}
 		if abs32(int32(p.X)>>4-cx) <= r && abs32(int32(p.Z)>>4-cz) <= r {
@@ -461,7 +470,7 @@ func (g *Game) syncChunks(p *entity.Player) {
 			if p.SentChunks[key] {
 				continue
 			}
-			body := g.world.Chunk(x, z).EncodeBody(style)
+			body := g.wd(p.Dim).Chunk(x, z).EncodeBody(style)
 			sess.SendPlay("minecraft:level_chunk_with_light", func(w *protocol.Writer) {
 				packet.WriteLevelChunk(w, x, z, body)
 			})
@@ -538,15 +547,15 @@ func abs32(v int32) int32 {
 }
 
 // resendChunkWithLight 重发区块（带最新光照）给其观察者。
-func (g *Game) resendChunkWithLight(cx, cz int32) {
-	for _, p := range g.chunkViewers(cx, cz) {
+func (g *Game) resendChunkWithLight(dim, cx, cz int32) {
+	for _, p := range g.chunkViewers(dim, cx, cz) {
 		sess := g.sessionOf(p)
 		if sess == nil {
 			continue
 		}
 		style := world.StyleFor(g.playerProto(p))
 		x, z := cx, cz
-		body := g.world.Chunk(x, z).EncodeBody(style)
+		body := g.wd(dim).Chunk(x, z).EncodeBody(style)
 		p.Send.SendPlay("minecraft:level_chunk_with_light", func(w *protocol.Writer) {
 			packet.WriteLevelChunk(w, x, z, body)
 		})

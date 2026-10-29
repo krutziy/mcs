@@ -41,6 +41,7 @@ type mob struct {
 	eid  int32
 	uuid protocol.UUID
 	kind mobKind
+	dim  int32
 	x, y, z     float64
 	vx, vy, vz  float64 // 击退/重力
 	health      float32
@@ -58,18 +59,23 @@ const (
 	mobDespawnR   = 72.0
 )
 
-// spawnMob 生成一只生物并广播给区块观察者。
+// spawnMob 生成一只生物（默认主世界）并广播给区块观察者。
 func (g *Game) spawnMob(kindName string, x, y, z float64) *mob {
+	return g.spawnMobIn(DimOverworld, kindName, x, y, z)
+}
+
+// spawnMobIn 在指定维度生成生物。
+func (g *Game) spawnMobIn(dim int32, kindName string, x, y, z float64) *mob {
 	kind, ok := mobKinds[kindName]
 	if !ok {
 		return nil
 	}
 	eid := g.nextEID.Add(1)
-	m := &mob{eid: eid, uuid: entityUUID(eid), kind: kind,
+	m := &mob{eid: eid, uuid: entityUUID(eid), kind: kind, dim: dim,
 		x: x, y: y, z: z, health: kind.health, wanderCd: 20 + rand.Intn(100)}
 	m.lastBX, m.lastBY, m.lastBZ = x, y, z
 	g.mobs[eid] = m
-	for _, v := range g.chunkViewers(int32(x)>>4, int32(z)>>4) {
+	for _, v := range g.chunkViewers(dim, int32(x)>>4, int32(z)>>4) {
 		g.sendMobSpawn(v, m)
 	}
 	return m
@@ -89,6 +95,9 @@ func (g *Game) removeMob(m *mob) {
 	delete(g.mobs, m.eid)
 	eid := m.eid
 	for _, p := range g.players {
+		if p.Dim != m.dim {
+			continue
+		}
 		p.Send.SendPlay("minecraft:remove_entities", func(w *protocol.Writer) {
 			packet.WriteRemoveEntities(w, []int32{eid})
 		})
@@ -119,9 +128,9 @@ func (g *Game) tickMobs() {
 				if d > 1.4 {
 					nx, nz := m.x+dx/d*m.kind.speed, m.z+dz/d*m.kind.speed
 					// 前方一格被挡：尝试跳上台阶（上方两格需空）
-					if g.blockAt(floorI(nx), floorI(m.y)+0, floorI(nz)) &&
-						!g.blockAt(floorI(nx), floorI(m.y)+1, floorI(nz)) &&
-						!g.blockAt(floorI(nx), floorI(m.y)+2, floorI(nz)) {
+					if g.blockAtDim(m.dim, floorI(nx), floorI(m.y)+0, floorI(nz)) &&
+						!g.blockAtDim(m.dim, floorI(nx), floorI(m.y)+1, floorI(nz)) &&
+						!g.blockAtDim(m.dim, floorI(nx), floorI(m.y)+2, floorI(nz)) {
 						m.vy = 0.42 // 原版跳跃初速
 					}
 					m.x, m.z = nx, nz
@@ -142,7 +151,7 @@ func (g *Game) tickMobs() {
 				for try := 0; try < 4; try++ {
 					tx := m.x + (rand.Float64()-0.5)*16
 					tz := m.z + (rand.Float64()-0.5)*16
-					if g.blockAt(floorI(tx), floorI(m.y)-1, floorI(tz)) {
+					if g.blockAtDim(m.dim, floorI(tx), floorI(m.y)-1, floorI(tz)) {
 						m.tx, m.tz = tx, tz
 						break
 					}
@@ -153,7 +162,7 @@ func (g *Game) tickMobs() {
 				dx, dz := m.tx-m.x, m.tz-m.z
 				if d := math.Sqrt(dx*dx + dz*dz); d > 0.8 {
 					nx, nz := m.x+dx/d*m.kind.speed, m.z+dz/d*m.kind.speed
-					if g.blockAt(floorI(nx), floorI(m.y)-1, floorI(nz)) {
+					if g.blockAtDim(m.dim, floorI(nx), floorI(m.y)-1, floorI(nz)) {
 						m.x, m.z = nx, nz
 					} else {
 						m.tx, m.tz = 0, 0
@@ -174,13 +183,13 @@ func (g *Game) tickMobs() {
 		if absF(m.vz) < 0.005 {
 			m.vz = 0
 		}
-		if m.vy <= 0 && g.blockAt(floorI(m.x), floorI(m.y-0.1), floorI(m.z)) {
+		if m.vy <= 0 && g.blockAtDim(m.dim, floorI(m.x), floorI(m.y-0.1), floorI(m.z)) {
 			m.vy = 0
 			m.y = float64(floorI(m.y-0.1)) + 1
 		} else {
 			m.vy -= 0.08
 			m.y += m.vy
-			if m.vy > 0 && g.blockAt(floorI(m.x), floorI(m.y+1.9), floorI(m.z)) {
+			if m.vy > 0 && g.blockAtDim(m.dim, floorI(m.x), floorI(m.y+1.9), floorI(m.z)) {
 				m.vy = 0 // 撞头
 			}
 		}
@@ -193,7 +202,7 @@ func (g *Game) tickMobs() {
 			m.lastBX, m.lastBY, m.lastBZ = m.x, m.y, m.z
 			eid, x, y, z := m.eid, m.x, m.y, m.z
 			yaw := float32(0)
-			for _, v := range g.chunkViewers(int32(x)>>4, int32(z)>>4) {
+			for _, v := range g.chunkViewers(m.dim, int32(x)>>4, int32(z)>>4) {
 				v.Send.SendPlay("minecraft:teleport_entity", func(w *protocol.Writer) {
 					packet.WriteTeleportEntity(w, eid, x, y, z, 0, 0, 0, yaw, 0, true)
 				})
@@ -296,11 +305,11 @@ func (g *Game) killMob(m *mob, by *entity.Player) {
 			n += rand.Int31n(d.Max - d.Min + 1)
 		}
 		if n > 0 {
-			g.spawnItem(m.x, m.y+0.5, m.z, entity.Item{ID: d.Item, Count: n})
+			g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: d.Item, Count: n})
 		}
 	}
 	if xp := mobXP[m.kind.name]; xp > 0 {
-		g.spawnXPOrb(m.x, m.y+0.5, m.z, xp)
+		g.spawnXPOrb(m.dim, m.x, m.y+0.5, m.z, xp)
 	}
 	g.Bus.emit(MobKilled{Player: by, Kind: m.kind.name})
 }
@@ -395,10 +404,15 @@ func (g *Game) findSpawnSpot(dist int32, surface uint32) (float64, float64, floa
 
 // nearestPlayer 返回指定范围内最近的活着的玩家。
 func (g *Game) nearestPlayer(x, y, z float64, r float64) *entity.Player {
+	return g.nearestPlayerDim(-1, x, y, z, r)
+}
+
+// nearestPlayerDim 指定维度（-1 = 任意）内最近的活着的玩家。
+func (g *Game) nearestPlayerDim(dim int32, x, y, z float64, r float64) *entity.Player {
 	var best *entity.Player
 	bestD := r * r
 	for _, p := range g.players {
-		if p.Dead {
+		if p.Dead || (dim >= 0 && p.Dim != dim) {
 			continue
 		}
 		if d := dist2(x, y, z, p.X, p.Y, p.Z); d < bestD {
@@ -410,8 +424,16 @@ func (g *Game) nearestPlayer(x, y, z float64, r float64) *entity.Player {
 
 // nearestPlayerDist 返回最近玩家距离（无人时无穷远）。
 func (g *Game) nearestPlayerDist(x, y, z float64) float64 {
+	return g.nearestPlayerDistDim(-1, x, y, z)
+}
+
+// nearestPlayerDistDim 指定维度（-1 = 任意）的最近玩家距离。
+func (g *Game) nearestPlayerDistDim(dim int32, x, y, z float64) float64 {
 	d := math.MaxFloat64
 	for _, p := range g.players {
+		if dim >= 0 && p.Dim != dim {
+			continue
+		}
 		if dd := dist2(x, y, z, p.X, p.Y, p.Z); dd < d {
 			d = dd
 		}

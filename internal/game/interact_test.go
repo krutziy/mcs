@@ -48,7 +48,7 @@ func TestChestRoundtrip(t *testing.T) {
 	p.Cursor = entity.Item{ID: stone, Count: 10} // 直接模拟光标持有
 	g.handleContainerClick(&playerContainerClickEvent{p: p,
 		click: packet.ContainerClick{Window: 3, Slot: 0, Button: 0, Mode: 0}})
-	pos := [3]int32{8, -61, 8}
+	pos := [4]int32{DimOverworld, 8, -61, 8}
 	if g.chests[pos].slots[0].ID != stone || g.chests[pos].slots[0].Count != 10 {
 		t.Fatalf("箱子第 0 格应有 10 石头: %+v", g.chests[pos].slots[0])
 	}
@@ -163,7 +163,7 @@ func TestSandGravity(t *testing.T) {
 	g.world.SetBlock(8, -60, 8, world.StateSand)
 	g.world.SetBlock(8, -59, 8, world.StateSand)
 
-	g.triggerGravity(8, -60, 8) // 从下层沙开始触发（模拟下方被挖）
+	g.triggerGravity(DimOverworld, 8, -60, 8) // 从下层沙开始触发（模拟下方被挖）
 	if len(g.fallings) == 0 {
 		t.Fatal("悬空沙应转为下落实体")
 	}
@@ -186,7 +186,7 @@ func TestWaterFlow(t *testing.T) {
 	g.world.SetBlock(8, -61, 8, world.StateStone)
 	// 挖掉水旁边的石头
 	g.world.SetBlock(8, -61, 7, world.StateAir)
-	g.scheduleWaterFlow(8, -61, 7)
+	g.scheduleWaterFlow(DimOverworld, 8, -61, 7)
 	for i := 0; i < 10; i++ {
 		g.tick = int64(i*5 + 5)
 		g.tickWater()
@@ -201,8 +201,8 @@ func TestSaplingGrowth(t *testing.T) {
 	g, _, _ := newInteractGame(t)
 	g.world.SetBlock(8, -61, 8, world.StateDirt)
 	g.world.SetBlock(8, -60, 8, saplingState)
-	g.trackSapling(8, -60, 8, saplingState)
-	g.saplings[[3]int32{8, -60, 8}] = 250 // 已到必长树龄
+	g.trackSapling(DimOverworld, 8, -60, 8, saplingState)
+	g.saplings[[4]int32{DimOverworld, 8, -60, 8}] = 250 // 已到必长树龄
 	for i := 0; i < 8 && g.world.GetBlock(8, -60, 8) == saplingState; i++ {
 		g.tick += 40
 		g.tickSaplings()
@@ -235,7 +235,7 @@ func TestXPAndOrb(t *testing.T) {
 		t.Fatal("应同步 set_experience")
 	}
 	// 经验球拾取
-	g.spawnXPOrb(8.5, -60.5, 8.5, 5)
+	g.spawnXPOrb(DimOverworld, 8.5, -60.5, 8.5, 5)
 	for i := 0; i < itemPickupWait+5; i++ {
 		g.tickOrbs()
 	}
@@ -370,7 +370,7 @@ func TestExplodeBlocks(t *testing.T) {
 			g.world.SetBlock(50+dx, -61, 50+dz, world.StateStone)
 		}
 	}
-	g.explode(50.5, -60.5, 50.5, 3)
+	g.explode(DimOverworld, 50.5, -60.5, 50.5, 3)
 	if got := g.world.GetBlock(50, -61, 50); got != world.StateAir {
 		t.Fatalf("中心应被炸空: %d", got)
 	}
@@ -408,7 +408,7 @@ func TestLeafDecay(t *testing.T) {
 	}
 	// 独立叶子块（无原木支撑）
 	g.world.SetBlock(80, -60, 80, leavesDistance[7])
-	g.scheduleLeafCheck(80, -60, 80)
+	g.scheduleLeafCheck(DimOverworld, 80, -60, 80)
 	for i := 0; i < 6; i++ {
 		g.tick = int64(i*10 + 10)
 		g.tickLeafDecay()
@@ -419,7 +419,7 @@ func TestLeafDecay(t *testing.T) {
 	// 原木旁的叶子保留
 	g.world.SetBlock(90, -61, 90, logState)
 	g.world.SetBlock(90, -60, 90, leavesDistance[3])
-	g.scheduleLeafCheck(90, -60, 90)
+	g.scheduleLeafCheck(DimOverworld, 90, -60, 90)
 	for i := 0; i < 6; i++ {
 		g.tick = int64(i*10 + 10)
 		g.tickLeafDecay()
@@ -554,7 +554,7 @@ func TestBonemeal(t *testing.T) {
 	g.world.SetBlock(8, -62, 8, world.StateStone)
 	g.world.SetBlock(8, -61, 8, farmlandState)
 	g.world.SetBlock(8, -60, 8, wheatAges[1])
-	g.crops[[3]int32{8, -60, 8}] = 0
+	g.crops[[4]int32{DimOverworld, 8, -60, 8}] = 0
 
 	p.Slots[36] = entity.Item{ID: ids["bone_meal"], Count: 2}
 	if !g.tryBonemeal(p, packet.UseItemOn{X: 8, Y: -60, Z: 8, Face: 1, Sequence: 1}) {
@@ -600,7 +600,7 @@ func TestBrewingAndDrink(t *testing.T) {
 	if fs.find("minecraft:open_screen") == nil {
 		t.Fatal("应发 open_screen")
 	}
-	pos := [3]int32{8, -61, 8}
+	pos := [4]int32{DimOverworld, 8, -61, 8}
 	bs := g.brews[pos]
 	// awkward 药水在 0 槽 + 烈焰粉材料
 	bs.slots[0] = entity.Item{ID: itemPotion, Count: 1}
@@ -879,7 +879,7 @@ func TestComparatorChestSignal(t *testing.T) {
 
 	// 往箱里放 3 个石头（27 格中 1 格 → 信号 0…… 原版 1 格满堆 ≈ 1）
 	// 我们的公式 filled/total*15：1/27*15=0（取整）——改放更多观察
-	pos := [3]int32{1, -61, 1}
+	pos := [4]int32{DimOverworld, 1, -61, 1}
 	g.chests[pos] = &chestState{}
 	for i := 0; i < 14; i++ { // 14/27*15 = 7
 		g.chests[pos].slots[i] = entity.Item{ID: ids["stone"], Count: 64}
@@ -919,8 +919,8 @@ func TestObserverPulse(t *testing.T) {
 	g.world.SetBlock(1, -61, 0, observerOff)
 
 	g.world.SetBlock(1, -61, -1, world.StateStone)
-	g.recordBlockChange(1, -61, -1, world.StateStone)
-	g.scheduleObserverCheck(1, -61, -1)
+	g.recordBlockChange(DimOverworld, 1, -61, -1, world.StateStone)
+	g.scheduleObserverCheck(DimOverworld, 1, -61, -1)
 	if g.world.GetBlock(1, -61, 0) != observerOn {
 		t.Fatal("面前变化观察者应脉冲点亮")
 	}

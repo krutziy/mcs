@@ -69,7 +69,7 @@ func findPickaxe(g *Game, bit uint8) (int32, bool) {
 func TestItemPickup(t *testing.T) {
 	g, p, fs := newTestGame(packet.ModeSurvival)
 	g.world.SetBlock(8, -61, 8, world.StateStone)
-	g.spawnItem(8.5, -60.5, 8.5, entity.Item{ID: 55, Count: 3})
+	g.spawnItem(DimOverworld, 8.5, -60.5, 8.5, entity.Item{ID: 55, Count: 3})
 	for i := 0; i < itemPickupWait+20; i++ {
 		g.tickItems()
 	}
@@ -95,7 +95,7 @@ func TestItemGravity(t *testing.T) {
 			g.world.SetBlock(100+dx, -61, 100+dz, world.StateStone)
 		}
 	}
-	g.spawnItem(100.5, -58.5, 100.5, entity.Item{ID: 55, Count: 1})
+	g.spawnItem(DimOverworld, 100.5, -58.5, 100.5, entity.Item{ID: 55, Count: 1})
 	for i := 0; i < 40; i++ {
 		g.tickItems()
 	}

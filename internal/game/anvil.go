@@ -29,7 +29,7 @@ type anvilSession struct {
 
 // tryOpenAnvil 右键铁砧。
 func (g *Game) tryOpenAnvil(p *entity.Player, u packet.UseItemOn) bool {
-	if !anvilStates[g.world.GetBlock(u.X, u.Y, u.Z)] {
+	if !anvilStates[g.w(p).GetBlock(u.X, u.Y, u.Z)] {
 		return false
 	}
 	if _, ok := g.anvils[p.EntityID]; !ok {
@@ -52,7 +52,7 @@ func (g *Game) closeAnvil(p *entity.Player) {
 	for _, it := range []entity.Item{as.in0, as.in1} {
 		if it.ID != 0 {
 			if n := g.giveItem(p, it); n < it.Count {
-				g.spawnItem(p.X, p.Y+1, p.Z, entity.Item{ID: it.ID, Count: it.Count - n})
+				g.spawnItem(p.Dim, p.X, p.Y+1, p.Z, entity.Item{ID: it.ID, Count: it.Count - n})
 			}
 		}
 	}
@@ -177,6 +177,7 @@ func (g *Game) takeAnvilResult(p *entity.Player) bool {
 	} else {
 		p.Cursor.Count += result.Count
 	}
+	g.playSoundTo(p, SoundBlock, "block.anvil.use", 1, 1)
 	if !g.isCreative(p) {
 		p.Level -= cost
 		if p.Level < 0 {

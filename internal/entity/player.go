@@ -39,6 +39,12 @@ type Player struct {
 	SentChunks      map[[2]int32]bool
 	CenterCX, CenterCZ int32
 
+	// 维度（dimension_type 网络 ID：0 主世界 / 2 下界 / 3 末地）
+	Dim           int32
+	DimPos        map[int32][3]float64 // 各维度记住的离开位置
+	PortalTicks   int32                // 下界传送门站立计时（60 刻触发）
+	PortalCooldown int32               // 传送后冷却（防来回抖动）
+
 	// 经验（主循环独占）
 	TotalXP   int32
 	Level     int32

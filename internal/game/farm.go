@@ -30,7 +30,7 @@ func (g *Game) tryTill(p *entity.Player, u packet.UseItemOn) bool {
 	if len(name) < 4 || name[len(name)-4:] != "_hoe" {
 		return false
 	}
-	s := g.world.GetBlock(u.X, u.Y, u.Z)
+	s := g.w(p).GetBlock(u.X, u.Y, u.Z)
 	if !grassStates[s] && s != world.StateDirt {
 		return false
 	}
@@ -41,12 +41,12 @@ func (g *Game) tryTill(p *entity.Player, u packet.UseItemOn) bool {
 	// 邻水 → 湿耕地
 	wet := farmlandState
 	for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {1, -1, 0}, {-1, -1, 0}, {0, -1, 1}, {0, -1, -1}, {0, -1, 0}} {
-		if g.world.GetBlock(u.X+d[0], u.Y+d[1], u.Z+d[2]) == world.StateWater {
+		if g.w(p).GetBlock(u.X+d[0], u.Y+d[1], u.Z+d[2]) == world.StateWater {
 			wet = farmlandWet
 			break
 		}
 	}
-	g.applyBlock(u.X, u.Y, u.Z, wet, u.Sequence, p)
+	g.applyBlock(p.Dim, u.X, u.Y, u.Z, wet, u.Sequence, p)
 	g.damageHeld(p)
 	return true
 }
@@ -61,14 +61,14 @@ func (g *Game) tryPlantSeed(p *entity.Player, u packet.UseItemOn) bool {
 	if name != "wheat_seeds" {
 		return false
 	}
-	if g.world.GetBlock(u.X, u.Y, u.Z) != farmlandState && g.world.GetBlock(u.X, u.Y, u.Z) != farmlandWet {
+	if g.w(p).GetBlock(u.X, u.Y, u.Z) != farmlandState && g.w(p).GetBlock(u.X, u.Y, u.Z) != farmlandWet {
 		return false
 	}
-	if g.world.GetBlock(u.X, u.Y+1, u.Z) != world.StateAir {
+	if g.w(p).GetBlock(u.X, u.Y+1, u.Z) != world.StateAir {
 		return true
 	}
-	g.applyBlock(u.X, u.Y+1, u.Z, wheatAges[0], u.Sequence, p)
-	g.crops[[3]int32{u.X, u.Y + 1, u.Z}] = 0
+	g.applyBlock(p.Dim, u.X, u.Y+1, u.Z, wheatAges[0], u.Sequence, p)
+	g.crops[[4]int32{p.Dim, u.X, u.Y + 1, u.Z}] = 0
 	if !g.isCreative(p) {
 		s := &p.Slots[36+p.HeldSlot]
 		s.Count--
@@ -86,7 +86,7 @@ func (g *Game) tickCrops() {
 		return
 	}
 	for pos := range g.crops {
-		s := g.world.GetBlock(pos[0], pos[1], pos[2])
+		s := g.wd(pos[0]).GetBlock(pos[1], pos[2], pos[3])
 		age := -1
 		for i, wa := range wheatAges {
 			if s == wa {
@@ -100,12 +100,12 @@ func (g *Game) tickCrops() {
 		if rand.Intn(10) != 0 {
 			continue
 		}
-		g.applyBlock(pos[0], pos[1], pos[2], wheatAges[age+1], 0, nil)
+		g.applyBlock(pos[0], pos[1], pos[2], pos[3], wheatAges[age+1], 0, nil)
 	}
 }
 
 // harvestWheatIfMature 挖成熟小麦掉麦子+种子（未成熟只掉种子）。
-func (g *Game) harvestWheatIfMature(x, y, z int32, old uint32) {
+func (g *Game) harvestWheatIfMature(dim, x, y, z int32, old uint32) {
 	age := -1
 	for i, wa := range wheatAges {
 		if old == wa {
@@ -116,15 +116,15 @@ func (g *Game) harvestWheatIfMature(x, y, z int32, old uint32) {
 	if age < 0 {
 		return
 	}
-	delete(g.crops, [3]int32{x, y, z})
+	delete(g.crops, [4]int32{dim, x, y, z})
 	ids := assets.ItemIDs(777)
 	if age == 7 {
-		g.spawnItem(float64(x)+0.5, float64(y)+0.3, float64(z)+0.5,
+		g.spawnItem(dim, float64(x)+0.5, float64(y)+0.3, float64(z)+0.5,
 			entity.Item{ID: ids["wheat"], Count: 1})
-		g.spawnItem(float64(x)+0.5, float64(y)+0.3, float64(z)+0.5,
+		g.spawnItem(dim, float64(x)+0.5, float64(y)+0.3, float64(z)+0.5,
 			entity.Item{ID: ids["wheat_seeds"], Count: int32(1 + rand.Intn(2))})
 	} else {
-		g.spawnItem(float64(x)+0.5, float64(y)+0.3, float64(z)+0.5,
+		g.spawnItem(dim, float64(x)+0.5, float64(y)+0.3, float64(z)+0.5,
 			entity.Item{ID: ids["wheat_seeds"], Count: 1})
 	}
 }
@@ -141,11 +141,21 @@ func (g *Game) tryBonemeal(p *entity.Player, u packet.UseItemOn) bool {
 	if g.itemNameOf(p, held.ID) != "bone_meal" {
 		return false
 	}
-	s := g.world.GetBlock(u.X, u.Y, u.Z)
+	s := g.w(p).GetBlock(u.X, u.Y, u.Z)
+	if g.tryGiantMushroom(p, u, s) {
+		return true
+	}
+	g.blockSound(p.Dim, float64(u.X), float64(u.Y), float64(u.Z), "item.bone_meal.use")
+	// 浆果丛 → 催熟
+	if age := bushAgeOf(s); age >= 0 && age < 3 {
+		g.applyBlock(p.Dim, u.X, u.Y, u.Z, bushAge3, u.Sequence, p)
+		g.consumeBonemeal(p)
+		return true
+	}
 	// 树苗 → 立即成树
 	if s == saplingState {
-		g.world.SetBlock(u.X, u.Y, u.Z, world.StateAir)
-		g.growOak(u.X, u.Y, u.Z)
+		g.w(p).SetBlock(u.X, u.Y, u.Z, world.StateAir)
+		g.growOak(p.Dim, u.X, u.Y, u.Z)
 		g.consumeBonemeal(p)
 		return true
 	}
@@ -157,7 +167,7 @@ func (g *Game) tryBonemeal(p *entity.Player, u packet.UseItemOn) bool {
 			if ni > 7 {
 				ni = 7
 			}
-			g.applyBlock(u.X, u.Y, u.Z, wheatAges[ni], u.Sequence, p)
+			g.applyBlock(p.Dim, u.X, u.Y, u.Z, wheatAges[ni], u.Sequence, p)
 			g.consumeBonemeal(p)
 			return true
 		}

@@ -22,14 +22,15 @@ type chestState struct {
 
 // tryOpenChest 右键箱子方块打开窗口；返回 true 表示已拦截。
 func (g *Game) tryOpenChest(p *entity.Player, u packet.UseItemOn) bool {
-	if g.world.GetBlock(u.X, u.Y, u.Z) != chestBlockState {
+	if g.w(p).GetBlock(u.X, u.Y, u.Z) != chestBlockState {
 		return false
 	}
-	pos := [3]int32{u.X, u.Y, u.Z}
+	pos := [4]int32{p.Dim, u.X, u.Y, u.Z}
 	g.openChest[p.EntityID] = pos
 	if g.chests[pos] == nil {
 		g.chests[pos] = &chestState{}
 	}
+	g.blockSound(p.Dim, float64(u.X), float64(u.Y), float64(u.Z), "block.chest.open")
 	p.Send.SendPlay("minecraft:open_screen", func(w *protocol.Writer) {
 		packet.WriteOpenScreen(w, menuGeneric9x3, "Chest")
 	})
@@ -39,6 +40,9 @@ func (g *Game) tryOpenChest(p *entity.Player, u packet.UseItemOn) bool {
 
 // closeChest 关闭箱子窗口（内容留在箱内）。
 func (g *Game) closeChest(p *entity.Player) {
+	if pos, ok := g.openChest[p.EntityID]; ok {
+		g.blockSound(p.Dim, float64(pos[1]), float64(pos[2]), float64(pos[3]), "block.chest.close")
+	}
 	delete(g.openChest, p.EntityID)
 	p.Send.SendPlay("minecraft:container_close", func(w *protocol.Writer) {
 		packet.WriteContainerClose(w, 3)
@@ -60,7 +64,7 @@ func chestSlotRef(cs *chestState, p *entity.Player, slot int32) *entity.Item {
 }
 
 // syncChest 同步箱子窗口内容。
-func (g *Game) syncChest(p *entity.Player, pos [3]int32) {
+func (g *Game) syncChest(p *entity.Player, pos [4]int32) {
 	cs := g.chests[pos]
 	if cs == nil {
 		return
@@ -86,7 +90,7 @@ func (g *Game) syncChest(p *entity.Player, pos [3]int32) {
 }
 
 // dropChestContents 挖掉箱子时掉落内容物。
-func (g *Game) dropChestContents(pos [3]int32) {
+func (g *Game) dropChestContents(pos [4]int32) {
 	cs := g.chests[pos]
 	if cs == nil {
 		return
@@ -99,13 +103,13 @@ func (g *Game) dropChestContents(pos [3]int32) {
 	}
 	for _, it := range cs.slots {
 		if it.ID != 0 {
-			g.spawnItem(float64(pos[0])+0.5, float64(pos[1])+0.5, float64(pos[2])+0.5, it)
+			g.spawnItem(pos[0], float64(pos[1])+0.5, float64(pos[2])+0.5, float64(pos[3])+0.5, it)
 		}
 	}
 }
 
 type chestJSON struct {
-	Pos   [3]int32    `json:"pos"`
+	Pos   [4]int32    `json:"pos"`
 	Slots [][2]int32 `json:"slots"`
 }
 

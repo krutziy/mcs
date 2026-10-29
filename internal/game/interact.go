@@ -138,15 +138,15 @@ func (g *Game) tryPlaceBed(p *entity.Player, u packet.UseItemOn, tx, ty, tz int3
 	hx, hz := tx+dx, tz+dz
 	// 两格都得可放置
 	for _, pos := range [][3]int32{{tx, ty, tz}, {hx, ty, hz}} {
-		s := g.world.GetBlock(pos[0], pos[1], pos[2])
+		s := g.w(p).GetBlock(pos[0], pos[1], pos[2])
 		if s != world.StateAir && s != world.StateWater {
 			return false
 		}
 	}
-	g.world.SetBlock(tx, ty, tz, foot)
-	g.recordBlockChange(tx, ty, tz, foot)
-	g.world.SetBlock(hx, ty, hz, head)
-	g.recordBlockChange(hx, ty, hz, head)
+	g.w(p).SetBlock(tx, ty, tz, foot)
+	g.recordBlockChange(p.Dim, tx, ty, tz, foot)
+	g.w(p).SetBlock(hx, ty, hz, head)
+	g.recordBlockChange(p.Dim, hx, ty, hz, head)
 	g.flushBlockUpdates()
 	if u.Sequence > 0 {
 		p.Send.SendPlay("minecraft:block_changed_ack", func(w *protocol.Writer) {
@@ -190,7 +190,7 @@ func bedStatesFor(name, facing string) (uint32, uint32, bool) {
 
 // trySleepBed 右键床：设重生点；夜里且（单人或全员睡）则跳到清晨。
 func (g *Game) trySleepBed(p *entity.Player, u packet.UseItemOn) bool {
-	info, isBed := g.bedByState[g.world.GetBlock(u.X, u.Y, u.Z)]
+	info, isBed := g.bedByState[g.w(p).GetBlock(u.X, u.Y, u.Z)]
 	if !isBed {
 		return false
 	}
@@ -232,7 +232,7 @@ func (g *Game) trySleepBed(p *entity.Player, u packet.UseItemOn) bool {
 }
 
 // breakBedIfHit 挖到床的任一半：两半一起清掉并掉落一张床。
-func (g *Game) breakBedIfHit(x, y, z int32, old uint32) {
+func (g *Game) breakBedIfHit(dim, x, y, z int32, old uint32) {
 	info, isBed := g.bedByState[old]
 	if !isBed {
 		return
@@ -245,9 +245,9 @@ func (g *Game) breakBedIfHit(x, y, z int32, old uint32) {
 		other = [3]int32{x + dx, y, z + dz}
 	}
 	// 清另一半（若也是床）
-	if _, ok := g.bedByState[g.world.GetBlock(other[0], other[1], other[2])]; ok {
-		g.world.SetBlock(other[0], other[1], other[2], world.StateAir)
-		g.recordBlockChange(other[0], other[1], other[2], world.StateAir)
+	if _, ok := g.bedByState[g.wd(dim).GetBlock(other[0], other[1], other[2])]; ok {
+		g.wd(dim).SetBlock(other[0], other[1], other[2], world.StateAir)
+		g.recordBlockChange(dim, other[0], other[1], other[2], world.StateAir)
 	}
 	g.flushBlockUpdates()
 }
@@ -264,13 +264,13 @@ func (g *Game) tryPlaceDoor(p *entity.Player, u packet.UseItemOn, tx, ty, tz int
 	if !ok {
 		return false
 	}
-	if g.world.GetBlock(tx, ty+1, tz) != world.StateAir {
+	if g.w(p).GetBlock(tx, ty+1, tz) != world.StateAir {
 		return false
 	}
-	g.world.SetBlock(tx, ty, tz, lower)
-	g.recordBlockChange(tx, ty, tz, lower)
-	g.world.SetBlock(tx, ty+1, tz, upper)
-	g.recordBlockChange(tx, ty+1, tz, upper)
+	g.w(p).SetBlock(tx, ty, tz, lower)
+	g.recordBlockChange(p.Dim, tx, ty, tz, lower)
+	g.w(p).SetBlock(tx, ty+1, tz, upper)
+	g.recordBlockChange(p.Dim, tx, ty+1, tz, upper)
 	g.flushBlockUpdates()
 	if u.Sequence > 0 {
 		p.Send.SendPlay("minecraft:block_changed_ack", func(w *protocol.Writer) {
@@ -318,7 +318,7 @@ func doorStatesFor(facing string, open bool) (uint32, uint32, bool) {
 
 // toggleDoor 右键门：两半开关互换。
 func (g *Game) toggleDoor(p *entity.Player, u packet.UseItemOn) bool {
-	s := g.world.GetBlock(u.X, u.Y, u.Z)
+	s := g.w(p).GetBlock(u.X, u.Y, u.Z)
 	info, isDoor := g.doorByState[s]
 	if !isDoor {
 		return false
@@ -327,19 +327,26 @@ func (g *Game) toggleDoor(p *entity.Player, u packet.UseItemOn) bool {
 	if newS == 0 {
 		return true
 	}
+	if info2, ok := g.doorByState[newS]; ok && info2 != nil {
+		if info2.open {
+			g.blockSound(p.Dim, float64(u.X), float64(u.Y), float64(u.Z), "block.wooden_door.open")
+		} else {
+			g.blockSound(p.Dim, float64(u.X), float64(u.Y), float64(u.Z), "block.wooden_door.close")
+		}
+	}
 	other := u.Y
 	if info.half == "lower" {
 		other = u.Y + 1
 	} else {
 		other = u.Y - 1
 	}
-	g.world.SetBlock(u.X, u.Y, u.Z, newS)
-	g.recordBlockChange(u.X, u.Y, u.Z, newS)
-	if o := g.world.GetBlock(u.X, other, u.Z); g.doorByState[o] != nil {
+	g.w(p).SetBlock(u.X, u.Y, u.Z, newS)
+	g.recordBlockChange(p.Dim, u.X, u.Y, u.Z, newS)
+	if o := g.w(p).GetBlock(u.X, other, u.Z); g.doorByState[o] != nil {
 		no := g.doorOpenFlip[[2]uint32{o, 0}]
 		if no != 0 {
-			g.world.SetBlock(u.X, other, u.Z, no)
-			g.recordBlockChange(u.X, other, u.Z, no)
+			g.w(p).SetBlock(u.X, other, u.Z, no)
+			g.recordBlockChange(p.Dim, u.X, other, u.Z, no)
 		}
 	}
 	g.flushBlockUpdates()
@@ -352,7 +359,7 @@ func (g *Game) toggleDoor(p *entity.Player, u packet.UseItemOn) bool {
 }
 
 // breakDoorIfHit 挖到门的任一半：两半一起清掉。
-func (g *Game) breakDoorIfHit(x, y, z int32, old uint32) {
+func (g *Game) breakDoorIfHit(dim, x, y, z int32, old uint32) {
 	info, isDoor := g.doorByState[old]
 	if !isDoor {
 		return
@@ -363,9 +370,9 @@ func (g *Game) breakDoorIfHit(x, y, z int32, old uint32) {
 	} else {
 		other = y - 1
 	}
-	if g.doorByState[g.world.GetBlock(x, other, z)] != nil {
-		g.world.SetBlock(x, other, z, world.StateAir)
-		g.recordBlockChange(x, other, z, world.StateAir)
+	if g.doorByState[g.wd(dim).GetBlock(x, other, z)] != nil {
+		g.wd(dim).SetBlock(x, other, z, world.StateAir)
+		g.recordBlockChange(dim, x, other, z, world.StateAir)
 	}
 	g.flushBlockUpdates()
 }
@@ -373,15 +380,16 @@ func (g *Game) breakDoorIfHit(x, y, z int32, old uint32) {
 // ---- 沙砾重力 ----
 
 // gravityBlockAt 方块更新后检查上方是否重力方块，是则转为下落实体。
-func (g *Game) triggerGravity(x, y, z int32) {
+func (g *Game) triggerGravity(dim, x, y, z int32) {
+	w := g.wd(dim)
 	for yy := y; ; yy++ {
-		s := g.world.GetBlock(x, yy, z)
+		s := w.GetBlock(x, yy, z)
 		if s != world.StateSand && s != world.StateGravel {
 			break
 		}
-		g.world.SetBlock(x, yy, z, world.StateAir)
-		g.recordBlockChange(x, yy, z, world.StateAir)
-		g.spawnFallingBlock(x, yy, z, s)
+		w.SetBlock(x, yy, z, world.StateAir)
+		g.recordBlockChange(dim, x, yy, z, world.StateAir)
+		g.spawnFallingBlock(dim, x, yy, z, s)
 	}
 	g.flushBlockUpdates()
 }
@@ -391,17 +399,18 @@ type fallingBlock struct {
 	eid       int32
 	uuid      protocol.UUID
 	state     uint32
+	dim       int32
 	x, y, z   float64
 	vy        float64
 }
 
 // spawnFallingBlock 生成下落方块实体并广播。
-func (g *Game) spawnFallingBlock(x, y, z int32, state uint32) {
+func (g *Game) spawnFallingBlock(dim, x, y, z int32, state uint32) {
 	eid := g.nextEID.Add(1)
-	fb := &fallingBlock{eid: eid, uuid: entityUUID(eid), state: state,
+	fb := &fallingBlock{eid: eid, uuid: entityUUID(eid), state: state, dim: dim,
 		x: float64(x) + 0.5, y: float64(y), z: float64(z) + 0.5, vy: -0.1}
 	g.fallings[eid] = fb
-	for _, v := range g.chunkViewers(x>>4, z>>4) {
+	for _, v := range g.chunkViewers(dim, x>>4, z>>4) {
 		typ := g.entityTypeID(v, "falling_block")
 		st, ex, ez := state, x, z
 		v.Send.SendPlay("minecraft:add_entity", func(w *protocol.Writer) {
@@ -418,11 +427,11 @@ func (g *Game) tickFallings() {
 	for eid, fb := range g.fallings {
 		fb.vy -= 0.04
 		ny := fb.y + fb.vy
-		if g.blockAt(floorI(fb.x), floorI(ny-0.02), floorI(fb.z)) {
+		if g.blockAtDim(fb.dim, floorI(fb.x), floorI(ny-0.02), floorI(fb.z)) {
 			// 落地：放置在命中方块上方
 			ly := floorI(ny-0.02) + 1
-			g.world.SetBlock(floorI(fb.x), ly, floorI(fb.z), fb.state)
-			g.recordBlockChange(floorI(fb.x), ly, floorI(fb.z), fb.state)
+			g.wd(fb.dim).SetBlock(floorI(fb.x), ly, floorI(fb.z), fb.state)
+			g.recordBlockChange(fb.dim, floorI(fb.x), ly, floorI(fb.z), fb.state)
 			g.flushBlockUpdates()
 			g.removeFalling(eid)
 			continue
@@ -435,8 +444,12 @@ func (g *Game) tickFallings() {
 }
 
 func (g *Game) removeFalling(eid int32) {
+	fb := g.fallings[eid]
 	delete(g.fallings, eid)
 	for _, p := range g.players {
+		if fb != nil && p.Dim != fb.dim {
+			continue
+		}
 		p.Send.SendPlay("minecraft:remove_entities", func(w *protocol.Writer) {
 			packet.WriteRemoveEntities(w, []int32{eid})
 		})
@@ -446,10 +459,11 @@ func (g *Game) removeFalling(eid int32) {
 // ---- 简化水流 ----
 
 // scheduleWaterFlow 挖掉方块后，若相邻有水则安排该位流水。
-func (g *Game) scheduleWaterFlow(x, y, z int32) {
+func (g *Game) scheduleWaterFlow(dim, x, y, z int32) {
+	w := g.wd(dim)
 	for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {0, 1, 0}} {
-		if g.world.GetBlock(x+d[0], y+d[1], z+d[2]) >= 89 && g.world.GetBlock(x+d[0], y+d[1], z+d[2]) <= 104 {
-			g.waterQueue = append(g.waterQueue, [3]int32{x, y, z})
+		if s := w.GetBlock(x+d[0], y+d[1], z+d[2]); s >= world.WaterMin && s <= world.WaterMax {
+			g.waterQueue = append(g.waterQueue, [4]int32{dim, x, y, z})
 			return
 		}
 	}
@@ -463,15 +477,17 @@ func (g *Game) tickWater() {
 	next := g.waterQueue
 	g.waterQueue = nil
 	for _, pos := range next {
-		if g.world.GetBlock(pos[0], pos[1], pos[2]) != world.StateAir {
+		dim, x, y, z := pos[0], pos[1], pos[2], pos[3]
+		w := g.wd(dim)
+		if w.GetBlock(x, y, z) != world.StateAir {
 			continue
 		}
 		// 最低水平 level（源=0）
 		best := int32(-1)
 		for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}} {
-			s := g.world.GetBlock(pos[0]+d[0], pos[1]+d[1], pos[2]+d[2])
-			if s >= 89 && s <= 104 {
-				lv := int32(s) - 89
+			s := w.GetBlock(x+d[0], y+d[1], z+d[2])
+			if s >= world.WaterMin && s <= world.WaterMax {
+				lv := int32(s) - int32(world.WaterMin)
 				if best == -1 || lv < best {
 					best = lv
 				}
@@ -481,22 +497,22 @@ func (g *Game) tickWater() {
 			continue
 		}
 		// 上方有水 → 垂直流（level 同上方）
-		if up := g.world.GetBlock(pos[0], pos[1]+1, pos[2]); up >= 89 && up <= 104 {
-			best = int32(up) - 89
+		if up := w.GetBlock(x, y+1, z); up >= world.WaterMin && up <= world.WaterMax {
+			best = int32(up) - int32(world.WaterMin)
 		} else if best >= 4 {
 			continue // 水平扩散最多 4 格
 		} else {
 			best++
 		}
-		ns := uint32(89 + best)
-		g.world.SetBlock(pos[0], pos[1], pos[2], ns)
-		g.recordBlockChange(pos[0], pos[1], pos[2], ns)
+		ns := uint32(int32(world.WaterMin) + best)
+		w.SetBlock(x, y, z, ns)
+		g.recordBlockChange(dim, x, y, z, ns)
 		// 继续扩散
-		g.scheduleWaterFlow(pos[0]+1, pos[1], pos[2])
-		g.scheduleWaterFlow(pos[0]-1, pos[1], pos[2])
-		g.scheduleWaterFlow(pos[0], pos[1], pos[2]+1)
-		g.scheduleWaterFlow(pos[0], pos[1], pos[2]-1)
-		g.scheduleWaterFlow(pos[0], pos[1]-1, pos[2])
+		g.scheduleWaterFlow(dim, x+1, y, z)
+		g.scheduleWaterFlow(dim, x-1, y, z)
+		g.scheduleWaterFlow(dim, x, y, z+1)
+		g.scheduleWaterFlow(dim, x, y, z-1)
+		g.scheduleWaterFlow(dim, x, y-1, z)
 	}
 	g.flushBlockUpdates()
 }
@@ -504,9 +520,9 @@ func (g *Game) tickWater() {
 // ---- 树苗 ----
 
 // trackSapling 放置树苗时登记。
-func (g *Game) trackSapling(x, y, z int32, state uint32) {
+func (g *Game) trackSapling(dim, x, y, z int32, state uint32) {
 	if state == saplingState {
-		g.saplings[[3]int32{x, y, z}] = 0
+		g.saplings[[4]int32{dim, x, y, z}] = 0
 	}
 }
 
@@ -516,7 +532,7 @@ func (g *Game) tickSaplings() {
 		return
 	}
 	for pos, age := range g.saplings {
-		if g.world.GetBlock(pos[0], pos[1], pos[2]) != saplingState {
+		if g.wd(pos[0]).GetBlock(pos[1], pos[2], pos[3]) != saplingState {
 			delete(g.saplings, pos)
 			continue
 		}
@@ -526,16 +542,17 @@ func (g *Game) tickSaplings() {
 			continue
 		}
 		delete(g.saplings, pos)
-		g.growOak(pos[0], pos[1], pos[2])
+		g.growOak(pos[0], pos[1], pos[2], pos[3])
 	}
 }
 
 // growOak 在树苗位置长一棵橡树（4-5 格树干 + 树冠）。
-func (g *Game) growOak(x, y, z int32) {
+func (g *Game) growOak(dim, x, y, z int32) {
+	w := g.wd(dim)
 	trunk := int32(4 + rand.Intn(2))
 	for t := int32(0); t < trunk; t++ {
-		g.world.SetBlock(x, y+t, z, logState)
-		g.recordBlockChange(x, y+t, z, logState)
+		w.SetBlock(x, y+t, z, logState)
+		g.recordBlockChange(dim, x, y+t, z, logState)
 	}
 	top := y + trunk - 1
 	for dy := int32(-2); dy <= 1; dy++ {
@@ -552,9 +569,9 @@ func (g *Game) growOak(x, y, z int32) {
 					continue
 				}
 				px, py, pz := x+dx, top+dy, z+dz
-				if g.world.GetBlock(px, py, pz) == world.StateAir {
-					g.world.SetBlock(px, py, pz, leavesState)
-					g.recordBlockChange(px, py, pz, leavesState)
+				if w.GetBlock(px, py, pz) == world.StateAir {
+					w.SetBlock(px, py, pz, leavesState)
+					g.recordBlockChange(dim, px, py, pz, leavesState)
 				}
 			}
 		}

@@ -349,6 +349,10 @@ const (
 	stateSpruceLeaves uint32 = 322
 	stateBirchLog   uint32 = 146
 	stateOakLog2    uint32 = 8070
+	stateBerryBush2 uint32 = 24300 // sweet_berry_bush age=2
+	stateBerryBush3 uint32 = 24301 // sweet_berry_bush age=3
+	stateBrownShroom uint32 = 3828
+	stateRedShroom   uint32 = 3829
 )
 
 // BiomeAt 由温度/湿度噪声决定群系（确定性）。
@@ -410,6 +414,30 @@ func (g *NoiseGenerator) decorate(ch *world.Chunk) {
 				}
 				if r > dens && ch.GetBlock(x, h+1, z) == world.StateAir {
 					ch.SetBlock(x, h+1, z, stateShortGrass)
+				}
+				// 针叶林浆果丛（age 2-3）
+				if biome == 4 && ch.GetBlock(x, h+1, z) == world.StateAir {
+					if r < -0.955 {
+						if g.valueNoise(float64(wx), float64(wz), g.Seed+57) > 0 {
+							ch.SetBlock(x, h+1, z, stateBerryBush3)
+						} else {
+							ch.SetBlock(x, h+1, z, stateBerryBush2)
+						}
+					}
+				}
+				// 蘑菇：森林/针叶林常见、平原稀有
+				if ch.GetBlock(x, h+1, z) == world.StateAir {
+					mThresh := -0.985
+					if biome == 3 || biome == 4 {
+						mThresh = -0.955
+					}
+					if r > mThresh && r < mThresh+0.01 {
+						if g.valueNoise(float64(wx)*2.3, float64(wz)*2.3, g.Seed+71) > 0 {
+							ch.SetBlock(x, h+1, z, stateRedShroom)
+						} else {
+							ch.SetBlock(x, h+1, z, stateBrownShroom)
+						}
+					}
 				}
 			}
 		}

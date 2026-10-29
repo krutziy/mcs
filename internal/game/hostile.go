@@ -36,6 +36,7 @@ type arrow struct {
 	eid        int32
 	uuid       protocol.UUID
 	owner      int32
+	dim        int32
 	x, y, z    float64
 	vx, vy, vz float64
 	age        int
@@ -44,7 +45,7 @@ type arrow struct {
 // tickHostileAI 敌对生物扩展行为：骷髅射箭、苦力怕引信。
 func (g *Game) tickHostileAI(m *mob) {
 	if m.kind.name == "skeleton" {
-		target := g.nearestPlayer(m.x, m.y, m.z, 15)
+		target := g.nearestPlayerDim(m.dim, m.x, m.y, m.z, 15)
 		if target == nil || target.Dead {
 			return
 		}
@@ -61,7 +62,7 @@ func (g *Game) tickHostileAI(m *mob) {
 		return
 	}
 	if m.kind.name == "creeper" {
-		target := g.nearestPlayer(m.x, m.y, m.z, 3)
+		target := g.nearestPlayerDim(m.dim, m.x, m.y, m.z, 3)
 		_, has := g.creepers[m.eid]
 		if target != nil && !target.Dead {
 			if !has {
@@ -85,12 +86,12 @@ func (g *Game) shootArrow(m *mob, target *entity.Player) {
 		d = 0.5
 	}
 	speed := 0.4
-	ar := &arrow{eid: eid, owner: m.eid,
+	ar := &arrow{eid: eid, owner: m.eid, dim: m.dim,
 		x: m.x, y: m.y + 1.5, z: m.z,
 		vx: dx / d * speed, vy: dy/d*speed + d*0.02, vz: dz / d * speed}
 	ar.uuid = entityUUID(eid)
 	g.arrows[eid] = ar
-	for _, v := range g.chunkViewers(int32(m.x)>>4, int32(m.z)>>4) {
+	for _, v := range g.chunkViewers(m.dim, int32(m.x)>>4, int32(m.z)>>4) {
 		typ := g.entityTypeID(v, "arrow")
 		eid2, x, y, z := eid, ar.x, ar.y, ar.z
 		vx, vy, vz := int16(ar.vx*8000), int16(ar.vy*8000), int16(ar.vz*8000)
@@ -118,13 +119,13 @@ func (g *Game) tickArrows() {
 		for st := 1; st <= steps && !removed; st++ {
 			f := float64(st) / float64(steps)
 			sx, sy, sz := ox+(nx-ox)*f, oy+(ny-oy)*f, oz+(nz-oz)*f
-			if g.blockAt(floorI(sx), floorI(sy), floorI(sz)) {
+			if g.blockAtDim(ar.dim, floorI(sx), floorI(sy), floorI(sz)) {
 				g.removeArrow(eid)
 				removed = true
 				break
 			}
 			for _, p := range g.players {
-				if p.Dead || p.EntityID == ar.owner {
+				if p.Dead || p.Dim != ar.dim || p.EntityID == ar.owner {
 					continue
 				}
 				if math.Abs(p.X-sx) < 0.7 && math.Abs(p.Z-sz) < 0.7 && sy > p.Y && sy < p.Y+2.0 {
@@ -138,7 +139,7 @@ func (g *Game) tickArrows() {
 				break
 			}
 			for mid, m := range g.mobs {
-				if mid == ar.owner {
+				if mid == ar.owner || m.dim != ar.dim {
 					continue
 				}
 				if math.Abs(m.x-sx) < 0.8 && math.Abs(m.z-sz) < 0.8 && sy > m.y && sy < m.y+2.0 {
@@ -160,8 +161,12 @@ func (g *Game) tickArrows() {
 }
 
 func (g *Game) removeArrow(eid int32) {
+	ar := g.arrows[eid]
 	delete(g.arrows, eid)
 	for _, p := range g.players {
+		if ar != nil && p.Dim != ar.dim {
+			continue
+		}
 		p.Send.SendPlay("minecraft:remove_entities", func(w *protocol.Writer) {
 			packet.WriteRemoveEntities(w, []int32{eid})
 		})
@@ -194,7 +199,7 @@ func (g *Game) tickCreepers() {
 		if m == nil {
 			continue
 		}
-		g.explode(m.x, m.y+0.5, m.z, 3)
+		g.explode(m.dim, m.x, m.y+0.5, m.z, 3)
 		g.killMobSilent(m)
 	}
 }
@@ -204,6 +209,9 @@ func (g *Game) killMobSilent(m *mob) {
 	delete(g.mobs, m.eid)
 	eid := m.eid
 	for _, p := range g.players {
+		if p.Dim != m.dim {
+			continue
+		}
 		p.Send.SendPlay("minecraft:remove_entities", func(w *protocol.Writer) {
 			packet.WriteRemoveEntities(w, []int32{eid})
 		})
@@ -211,9 +219,9 @@ func (g *Game) killMobSilent(m *mob) {
 }
 
 // explode 爆炸：半径内破坏非防爆方块 + 伤害随距离衰减 + 音效粒子。
-func (g *Game) explode(x, y, z float64, r int32) {
+func (g *Game) explode(dim int32, x, y, z float64, r int32) {
 	// 爆炸音效与粒子（level_event 1021=爆炸音）
-	for _, v := range g.chunkViewers(int32(x)>>4, int32(z)>>4) {
+	for _, v := range g.chunkViewers(dim, int32(x)>>4, int32(z)>>4) {
 		v.Send.SendPlay("minecraft:level_event", func(w *protocol.Writer) {
 			packet.WriteLevelEvent(w, 1021, int32(x), int32(y), int32(z), 0, false)
 		})
@@ -228,7 +236,7 @@ func (g *Game) explode(x, y, z float64, r int32) {
 					continue
 				}
 				bx, by, bz := cx+dx, cy+dy, cz+dz
-				s := g.world.GetBlock(bx, by, bz)
+				s := g.wd(dim).GetBlock(bx, by, bz)
 				if s == world.StateAir || s == world.StateBedrock {
 					continue
 				}
@@ -237,15 +245,15 @@ func (g *Game) explode(x, y, z float64, r int32) {
 		}
 	}
 	for _, pos := range changes {
-		g.dropFurnaceContents(pos)
-		g.dropChestContents(pos)
-		g.world.SetBlock(pos[0], pos[1], pos[2], world.StateAir)
-		g.recordBlockChange(pos[0], pos[1], pos[2], world.StateAir)
+		g.dropFurnaceContents([4]int32{dim, pos[0], pos[1], pos[2]})
+		g.dropChestContents([4]int32{dim, pos[0], pos[1], pos[2]})
+		g.wd(dim).SetBlock(pos[0], pos[1], pos[2], world.StateAir)
+		g.recordBlockChange(dim, pos[0], pos[1], pos[2], world.StateAir)
 	}
 	g.flushBlockUpdates()
 	// 伤害（中心 30 线性衰减到边缘 0；盔甲参与减免）
 	for _, p := range g.players {
-		if p.Dead {
+		if p.Dead || p.Dim != dim {
 			continue
 		}
 		d := math.Sqrt(dist2(p.X, p.Y, p.Z, x, y, z))
@@ -258,6 +266,9 @@ func (g *Game) explode(x, y, z float64, r int32) {
 	}
 	// 生物伤害与部分掉落
 	for _, m := range g.mobs {
+		if m.dim != dim {
+			continue
+		}
 		d := math.Sqrt(dist2(m.x, m.y, m.z, x, y, z))
 		if d <= float64(r)+1 {
 			m.health -= float32(24 * (1 - d/(float64(r)+1)))
@@ -268,9 +279,9 @@ func (g *Game) explode(x, y, z float64, r int32) {
 	}
 	// 触发重力与流水
 	for _, pos := range changes {
-		g.triggerGravity(pos[0], pos[1]+1, pos[2])
-		g.scheduleWaterFlow(pos[0], pos[1], pos[2])
-		g.scheduleLeafCheck(pos[0], pos[1], pos[2])
+		g.triggerGravity(dim, pos[0], pos[1]+1, pos[2])
+		g.scheduleWaterFlow(dim, pos[0], pos[1], pos[2])
+		g.scheduleLeafCheck(dim, pos[0], pos[1], pos[2])
 	}
 }
 
@@ -287,13 +298,16 @@ func (g *Game) tickUndeadBurn() {
 		return
 	}
 	for _, m := range g.mobs {
+		if m.dim != DimOverworld {
+			continue
+		}
 		if m.kind.name != "zombie" && m.kind.name != "skeleton" {
 			continue
 		}
 		// 头顶遮挡：向上找 24 格内实体方块
 		blocked := false
 		for dy := int32(2); dy < 26; dy++ {
-			if g.blockAt(floorI(m.x), floorI(m.y)+dy, floorI(m.z)) {
+			if g.blockAtDim(m.dim, floorI(m.x), floorI(m.y)+dy, floorI(m.z)) {
 				blocked = true
 				break
 			}
@@ -314,13 +328,13 @@ func (g *Game) tickUndeadBurn() {
 var leavesDistance = [8]uint32{0, 270, 274, 278, 282, 286, 290, 294}
 
 // scheduleLeafCheck 登记需重算 distance 的叶子（方块变更周围）。
-func (g *Game) scheduleLeafCheck(x, y, z int32) {
+func (g *Game) scheduleLeafCheck(dim, x, y, z int32) {
 	for dx := int32(-1); dx <= 1; dx++ {
 		for dy := int32(-1); dy <= 1; dy++ {
 			for dz := int32(-1); dz <= 1; dz++ {
-				s := g.world.GetBlock(x+dx, y+dy, z+dz)
+				s := g.wd(dim).GetBlock(x+dx, y+dy, z+dz)
 				if isLeaves(s) {
-					g.leafQueue = append(g.leafQueue, [3]int32{x + dx, y + dy, z + dz})
+					g.leafQueue = append(g.leafQueue, [4]int32{dim, x + dx, y + dy, z + dz})
 				}
 			}
 		}
@@ -355,7 +369,8 @@ func (g *Game) tickLeafDecay() {
 	queue := g.leafQueue
 	g.leafQueue = nil
 	for _, pos := range queue {
-		s := g.world.GetBlock(pos[0], pos[1], pos[2])
+		dim, x, y, z := pos[0], pos[1], pos[2], pos[3]
+		s := g.wd(dim).GetBlock(x, y, z)
 		if !isLeaves(s) {
 			continue
 		}
@@ -367,7 +382,7 @@ func (g *Game) tickLeafDecay() {
 					if dx == 0 && dy == 0 && dz == 0 {
 						continue
 					}
-					ns := g.world.GetBlock(pos[0]+dx, pos[1]+dy, pos[2]+dz)
+					ns := g.wd(dim).GetBlock(x+dx, y+dy, z+dz)
 					if ns == logState {
 						best = 1
 					} else if d := leavesDist(ns); d > 0 && d+1 < best {
@@ -378,16 +393,16 @@ func (g *Game) tickLeafDecay() {
 		}
 		if best > 7 {
 			// 枯萎消失 + 概率掉树苗
-			g.world.SetBlock(pos[0], pos[1], pos[2], world.StateAir)
-			g.recordBlockChange(pos[0], pos[1], pos[2], world.StateAir)
+			g.wd(dim).SetBlock(x, y, z, world.StateAir)
+			g.recordBlockChange(dim, x, y, z, world.StateAir)
 			if rand.Intn(20) == 0 {
-				g.spawnItem(float64(pos[0])+0.5, float64(pos[1])+0.5, float64(pos[2])+0.5,
+				g.spawnItem(dim, float64(x)+0.5, float64(y)+0.5, float64(z)+0.5,
 					entity.Item{ID: g.itemID777("oak_sapling"), Count: 1})
 			}
-			g.scheduleLeafCheck(pos[0], pos[1], pos[2])
+			g.scheduleLeafCheck(dim, x, y, z)
 		} else if best != leavesDist(s) {
-			g.world.SetBlock(pos[0], pos[1], pos[2], leavesDistance[best])
-			g.recordBlockChange(pos[0], pos[1], pos[2], leavesDistance[best])
+			g.wd(dim).SetBlock(x, y, z, leavesDistance[best])
+			g.recordBlockChange(dim, x, y, z, leavesDistance[best])
 		}
 	}
 	g.flushBlockUpdates()

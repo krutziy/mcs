@@ -38,6 +38,8 @@ const (
 	StateDirt       uint32 = 10
 	StateBedrock    uint32 = 88
 	StateWater      uint32 = 89 // level=0（静止水源）
+	StateLava       uint32 = 105 // minecraft:lava level=0
+	StateObsidian   uint32 = 4925
 	StateSand       uint32 = 121
 	StateGravel     uint32 = 127
 )

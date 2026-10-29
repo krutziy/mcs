@@ -359,6 +359,11 @@ func RecipeFile(proto int32) ([]byte, error) {
 	return files.ReadFile(fmt.Sprintf("data/recipes_%d.txt", proto))
 }
 
+// Sounds 返回协议版本的音效表（音效短名 → sound_event 注册表网络 ID）。
+func Sounds(proto int32) map[string]int32 {
+	return loadTextTable(proto, "sounds")
+}
+
 // ItemTags 返回物品标签表（标签名 → 成员短名集合）。
 func ItemTags(proto int32) map[string]map[string]bool {
 	b, err := files.ReadFile(fmt.Sprintf("data/itemtags_%d.txt", proto))

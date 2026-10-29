@@ -75,25 +75,31 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		items:         map[int32]*itemEntity{},
 		mobs:          map[int32]*mob{},
 		crafting:      map[int32]*craftState{},
-		furnaces:      map[[3]int32]*furnaceState{},
-		openFurnace:   map[int32][3]int32{},
-		chests:        map[[3]int32]*chestState{},
-		openChest:     map[int32][3]int32{},
+		furnaces:      map[[4]int32]*furnaceState{},
+		openFurnace:   map[int32][4]int32{},
+		chests:        map[[4]int32]*chestState{},
+		openChest:     map[int32][4]int32{},
 		fallings:      map[int32]*fallingBlock{},
-		saplings:      map[[3]int32]int32{},
+		saplings:      map[[4]int32]int32{},
 		orbs:          map[int32]*xpOrb{},
 		arrows:        map[int32]*arrow{},
 		creepers:      map[int32]*creeperFuse{},
 		breeds:        map[int32]*breedState{},
-		crops:         map[[3]int32]int32{},
-		brews:         map[[3]int32]*brewingState{},
-		openBrew:      map[int32][3]int32{},
+		crops:         map[[4]int32]int32{},
+		bushes:        map[[4]int32]int32{},
+		brews:         map[[4]int32]*brewingState{},
+		openBrew:      map[int32][4]int32{},
 		enchOpen:     map[int32]bool{},
 		anvils:       map[int32]*anvilSession{},
 		itemNames:     map[int32]map[int32]string{},
-		pendingBlocks: map[[3]int32]uint32{},
+		pendingBlocks: map[[4]int32]uint32{},
 		drags:         map[int32]*dragState{},
 	}
+	g.soundIDs = map[int32]map[string]int32{777: assets.Sounds(777), 776: assets.Sounds(776), 774: assets.Sounds(774)}
+	g.soundIDs[775] = g.soundIDs[776]
+	g.dims = map[int32]*world.Manager{DimOverworld: g.world,
+		DimNether: world.NewManager(world.NewGenerator("nether", 0)),
+		DimEnd:    world.NewManager(world.NewGenerator("end", 0))}
 	fs := &fakeSender{}
 	p := &entity.Player{
 		EntityID: 101, Name: "Tester",
@@ -289,8 +295,8 @@ func TestCreativeSlotUpdatesHotbar(t *testing.T) {
 // TestFlushGroupsSectionUpdates 同节两个变更应合并为 section_blocks_update。
 func TestFlushGroupsSectionUpdates(t *testing.T) {
 	g, _, fs := newTestGame(packet.ModeCreative)
-	g.recordBlockChange(4, -60, 4, 0)
-	g.recordBlockChange(5, -60, 5, 0)
+	g.recordBlockChange(DimOverworld, 4, -60, 4, 0)
+	g.recordBlockChange(DimOverworld, 5, -60, 5, 0)
 	g.flushBlockUpdates()
 	b := fs.find("minecraft:section_blocks_update")
 	if b == nil {

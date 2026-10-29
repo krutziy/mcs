@@ -35,10 +35,10 @@ type brewingState struct {
 
 // tryOpenBrewing 右键酿造台打开窗口。
 func (g *Game) tryOpenBrewing(p *entity.Player, u packet.UseItemOn) bool {
-	if g.world.GetBlock(u.X, u.Y, u.Z) != brewingStandState {
+	if g.w(p).GetBlock(u.X, u.Y, u.Z) != brewingStandState {
 		return false
 	}
-	pos := [3]int32{u.X, u.Y, u.Z}
+	pos := [4]int32{p.Dim, u.X, u.Y, u.Z}
 	g.openBrew[p.EntityID] = pos
 	if g.brews[pos] == nil {
 		g.brews[pos] = &brewingState{}
@@ -73,7 +73,7 @@ func brewingSlotRef(bs *brewingState, p *entity.Player, slot int32) *entity.Item
 }
 
 // syncBrewing 同步酿造台窗口。
-func (g *Game) syncBrewing(p *entity.Player, pos [3]int32) {
+func (g *Game) syncBrewing(p *entity.Player, pos [4]int32) {
 	bs := g.brews[pos]
 	if bs == nil {
 		return
@@ -128,6 +128,7 @@ func (g *Game) tickBrewings() {
 			bs.brew++
 			if bs.brew >= 400 {
 				bs.brew = 0
+				g.blockSound(pos[0], float64(pos[1]), float64(pos[2]), float64(pos[3]), "block.brewing_stand.brew")
 				for i := 0; i < 3; i++ {
 					if bs.slots[i].ID == itemPotion || bs.slots[i].ID == itemSplash || bs.slots[i].ID == itemLingering {
 						if out, ok := g.brewing[[2]string{bs.potion[i], reagentName}]; ok && out != "" {
@@ -159,7 +160,7 @@ func (g *Game) tickBrewings() {
 }
 
 // dropBrewingContents 挖掉酿造台掉内容。
-func (g *Game) dropBrewingContents(pos [3]int32) {
+func (g *Game) dropBrewingContents(pos [4]int32) {
 	bs := g.brews[pos]
 	if bs == nil {
 		return
@@ -172,13 +173,13 @@ func (g *Game) dropBrewingContents(pos [3]int32) {
 	}
 	for _, it := range bs.slots {
 		if it.ID != 0 {
-			g.spawnItem(float64(pos[0])+0.5, float64(pos[1])+0.5, float64(pos[2])+0.5, it)
+			g.spawnItem(pos[0], float64(pos[1])+0.5, float64(pos[2])+0.5, float64(pos[3])+0.5, it)
 		}
 	}
 }
 
 type brewJSON struct {
-	Pos    [3]int32  `json:"pos"`
+	Pos    [4]int32  `json:"pos"`
 	Slots  [][2]int32 `json:"slots"`
 	Potion [3]string `json:"potion"`
 	Brew   int32     `json:"brew"`

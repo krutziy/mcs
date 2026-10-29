@@ -100,7 +100,7 @@ func (g *Game) handleInteract(ev *playerInteractEvent) {
 
 // sendLoveHearts 爱心粒子（level_event 18=爱心）。
 func (g *Game) sendLoveHearts(m *mob) {
-	for _, v := range g.chunkViewers(int32(m.x)>>4, int32(m.z)>>4) {
+	for _, v := range g.chunkViewers(m.dim, int32(m.x)>>4, int32(m.z)>>4) {
 		x, y, z := int32(m.x), int32(m.y+1), int32(m.z)
 		v.Send.SendPlay("minecraft:level_event", func(w *protocol.Writer) {
 			packet.WriteLevelEvent(w, 18, x, y, z, 0, false)

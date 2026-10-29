@@ -59,11 +59,11 @@ func (g *Game) fuelTime(name string) int32 {
 
 // tryOpenFurnace 右键熔炉方块时打开窗口；返回 true 表示已拦截。
 func (g *Game) tryOpenFurnace(p *entity.Player, u packet.UseItemOn) bool {
-	s := g.world.GetBlock(u.X, u.Y, u.Z)
+	s := g.w(p).GetBlock(u.X, u.Y, u.Z)
 	if s != furnaceLit && s != furnaceUnlit {
 		return false
 	}
-	pos := [3]int32{u.X, u.Y, u.Z}
+	pos := [4]int32{p.Dim, u.X, u.Y, u.Z}
 	g.openFurnace[p.EntityID] = pos
 	if g.furnaces[pos] == nil {
 		g.furnaces[pos] = &furnaceState{}
@@ -102,7 +102,7 @@ func furnaceSlotRef(fs *furnaceState, p *entity.Player, slot int32) *entity.Item
 }
 
 // syncFurnace 同步熔炉窗口内容与进度条。
-func (g *Game) syncFurnace(p *entity.Player, pos [3]int32) {
+func (g *Game) syncFurnace(p *entity.Player, pos [4]int32) {
 	fs := g.furnaces[pos]
 	if fs == nil {
 		return
@@ -191,7 +191,7 @@ func (g *Game) tickFurnaces() {
 			if burning {
 				target = furnaceLit
 			}
-			g.applyBlock(pos[0], pos[1], pos[2], target, 0, nil)
+			g.applyBlock(pos[0], pos[1], pos[2], pos[3], target, 0, nil)
 		}
 		for eid, fpos := range g.openFurnace {
 			if fpos == pos {
@@ -216,7 +216,7 @@ func (g *Game) itemNameOf777(id int32) string {
 }
 
 // dropFurnaceContents 挖掉熔炉时掉落内容物。
-func (g *Game) dropFurnaceContents(pos [3]int32) {
+func (g *Game) dropFurnaceContents(pos [4]int32) {
 	fs := g.furnaces[pos]
 	if fs == nil {
 		return
@@ -229,13 +229,13 @@ func (g *Game) dropFurnaceContents(pos [3]int32) {
 	}
 	for _, it := range []entity.Item{fs.input, fs.fuel, fs.output} {
 		if it.ID != 0 {
-			g.spawnItem(float64(pos[0])+0.5, float64(pos[1])+0.5, float64(pos[2])+0.5, it)
+			g.spawnItem(pos[0], float64(pos[1])+0.5, float64(pos[2])+0.5, float64(pos[3])+0.5, it)
 		}
 	}
 }
 
 type furnaceJSON struct {
-	Pos     [3]int32 `json:"pos"`
+	Pos     [4]int32 `json:"pos"`
 	Input   [2]int32 `json:"in"`
 	Fuel    [2]int32 `json:"fuel"`
 	Output  [2]int32 `json:"out"`

@@ -20,7 +20,7 @@ func openChestFor(t *testing.T, g *Game, p *entity.Player) *chestState {
 		t.Fatal("打开箱子失败")
 	}
 	pos := g.openChest[p.EntityID]
-	if pos == [3]int32{} || g.chests[pos] == nil {
+	if pos == [4]int32{} || g.chests[pos] == nil {
 		t.Fatal("箱子状态缺失")
 	}
 	return g.chests[pos]

@@ -228,7 +228,7 @@ func (g *Game) anvilResultToInv(p *entity.Player) bool {
 		if as.in0.ID == 0 {
 			as.in0 = it
 		} else {
-			g.spawnItem(p.X, p.Y+1, p.Z, entity.Item{ID: g.canonItem(p, it.ID), Count: it.Count - n})
+			g.spawnItem(p.Dim, p.X, p.Y+1, p.Z, entity.Item{ID: g.canonItem(p, it.ID), Count: it.Count - n})
 		}
 	}
 	return true

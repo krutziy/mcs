@@ -72,7 +72,7 @@ func rsWirePower(s uint32) int32 {
 
 // toggleLever 右键拉杆切换。
 func (g *Game) toggleLever(p *entity.Player, u packet.UseItemOn) bool {
-	s := g.world.GetBlock(u.X, u.Y, u.Z)
+	s := g.w(p).GetBlock(u.X, u.Y, u.Z)
 	if s != leverOn && s != leverOff {
 		return false
 	}
@@ -80,8 +80,9 @@ func (g *Game) toggleLever(p *entity.Player, u packet.UseItemOn) bool {
 	if s == leverOff {
 		ns = leverOn
 	}
-	g.applyBlock(u.X, u.Y, u.Z, ns, u.Sequence, p)
+	g.applyBlock(p.Dim, u.X, u.Y, u.Z, ns, u.Sequence, p)
 	g.rsDirty = true
+	g.blockSound(p.Dim, float64(u.X), float64(u.Y), float64(u.Z), "block.lever.click")
 	if u.Sequence > 0 {
 		p.Send.SendPlay("minecraft:block_changed_ack", func(w *protocol.Writer) {
 			packet.WriteBlockChangedAck(w, u.Sequence)
@@ -91,10 +92,11 @@ func (g *Game) toggleLever(p *entity.Player, u packet.UseItemOn) bool {
 }
 
 // scheduleRedstoneUpdate 方块变更邻接红石元件时触发重算。
-func (g *Game) scheduleRedstoneUpdate(x, y, z int32) {
+func (g *Game) scheduleRedstoneUpdate(dim, x, y, z int32) {
+	w := g.wd(dim)
 	for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1},
 		{1, 1, 0}, {-1, 1, 0}, {0, 1, 1}, {0, 1, -1}, {1, -1, 0}, {-1, -1, 0}, {0, -1, 1}, {0, -1, -1}} {
-		s := g.world.GetBlock(x+d[0], y+d[1], z+d[2])
+		s := w.GetBlock(x+d[0], y+d[1], z+d[2])
 		if rsIsWire(s) || s == lampOn || s == lampOff || s == torchLit || s == torchUnlit ||
 			s == repeaterOn || s == repeaterOff || s == leverOn || s == leverOff {
 			g.rsDirty = true
@@ -109,16 +111,19 @@ func (g *Game) tickRedstone() {
 		return
 	}
 	g.rsDirty = false
-	g.recomputeRedstone()
+	for dim := range g.dims {
+		g.recomputeRedstone(dim)
+	}
 }
 
 // recomputeRedstone 全网重算：收集信号源 → 沿线 BFS 衰减 → 负载与火把状态。
-func (g *Game) recomputeRedstone() {
+func (g *Game) recomputeRedstone(dim int32) {
+	w := g.wd(dim)
 	// 1) 扫描已加载区块全部方块找红石元件（存档世界通常几十区块，可承受；
 	//    用 Manager 提供的迭代）
 	type rsPos struct{ x, y, z int32 }
 	var wires, sources, lamps, torches, repeaters []rsPos
-	g.world.EachChunk(func(cx, cz int32, ch *world.Chunk) {
+	w.EachChunk(func(cx, cz int32, ch *world.Chunk) {
 		for i := int32(0); i < world.NumSections; i++ {
 			sec := ch.Section(i)
 			if sec == nil {
@@ -171,18 +176,18 @@ func (g *Game) recomputeRedstone() {
 	}
 	for _, src := range sources {
 		adj(src, func(n rsPos) {
-			if rsIsWire(g.world.GetBlock(n.x, n.y, n.z)) {
+			if rsIsWire(w.GetBlock(n.x, n.y, n.z)) {
 				push(n, 15)
 			}
 		})
 	}
 	// 火把：附着面不充能（简化：火把给全部邻线 15——灯直接亮，逻辑上"火把熄灭由其下方块充能"另行处理）
 	for _, t := range torches {
-		if g.world.GetBlock(t.x, t.y, t.z) != torchLit {
+		if w.GetBlock(t.x, t.y, t.z) != torchLit {
 			continue
 		}
 		adj(t, func(n rsPos) {
-			if rsIsWire(g.world.GetBlock(n.x, n.y, n.z)) {
+			if rsIsWire(w.GetBlock(n.x, n.y, n.z)) {
 				push(n, 15)
 			}
 		})
@@ -194,7 +199,7 @@ func (g *Game) recomputeRedstone() {
 			continue
 		}
 		adj(it.pos, func(n rsPos) {
-			if rsIsWire(g.world.GetBlock(n.x, n.y, n.z)) {
+			if rsIsWire(w.GetBlock(n.x, n.y, n.z)) {
 				push(n, it.pow-1)
 			}
 		})
@@ -214,13 +219,13 @@ func (g *Game) recomputeRedstone() {
 		if in {
 			ns = repeaterOn
 		}
-		if g.world.GetBlock(rp.x, rp.y, rp.z) != ns {
-			g.world.SetBlock(rp.x, rp.y, rp.z, ns)
-			g.recordBlockChange(rp.x, rp.y, rp.z, ns)
+		if w.GetBlock(rp.x, rp.y, rp.z) != ns {
+			w.SetBlock(rp.x, rp.y, rp.z, ns)
+			g.setRS(dim, rp.x, rp.y, rp.z, ns)
 		}
 		if in {
 			adj(rp, func(n rsPos) {
-				if rsIsWire(g.world.GetBlock(n.x, n.y, n.z)) && powerAt[n] < 15 {
+				if rsIsWire(w.GetBlock(n.x, n.y, n.z)) && powerAt[n] < 15 {
 					// 输出 15（会重新入队）
 					powerAt[n] = 15
 					queue = append(queue, qitem{n, 15})
@@ -235,9 +240,9 @@ func (g *Game) recomputeRedstone() {
 	// 3) 写回线 power
 	for _, wpos := range wires {
 		want := wireBase[powerAt[wpos]]
-		if g.world.GetBlock(wpos.x, wpos.y, wpos.z) != want {
-			g.world.SetBlock(wpos.x, wpos.y, wpos.z, want)
-			g.recordBlockChange(wpos.x, wpos.y, wpos.z, want)
+		if w.GetBlock(wpos.x, wpos.y, wpos.z) != want {
+			w.SetBlock(wpos.x, wpos.y, wpos.z, want)
+			g.setRS(dim, wpos.x, wpos.y, wpos.z, want)
 		}
 	}
 	// 4) 负载（灯）：邻接任何 power>0 线/源 → 亮
@@ -247,7 +252,7 @@ func (g *Game) recomputeRedstone() {
 			if powerAt[n] > 0 {
 				powered = true
 			}
-			if _, ok := rsIsSource(g.world.GetBlock(n.x, n.y, n.z)); ok {
+			if _, ok := rsIsSource(w.GetBlock(n.x, n.y, n.z)); ok {
 				powered = true
 			}
 		})
@@ -255,14 +260,14 @@ func (g *Game) recomputeRedstone() {
 		if powered {
 			ns = lampOn
 		}
-		if g.world.GetBlock(l.x, l.y, l.z) != ns {
-			g.world.SetBlock(l.x, l.y, l.z, ns)
-			g.recordBlockChange(l.x, l.y, l.z, ns)
+		if w.GetBlock(l.x, l.y, l.z) != ns {
+			w.SetBlock(l.x, l.y, l.z, ns)
+			g.setRS(dim, l.x, l.y, l.z, ns)
 		}
 	}
 	// 5) 火把：附着方块（下方）被充能（下方是 power>0 的线或点亮中继器邻接）→ 熄灭
 	for _, t := range torches {
-		below := g.world.GetBlock(t.x, t.y-1, t.z)
+		below := w.GetBlock(t.x, t.y-1, t.z)
 		fed := powerAt[rsPos{t.x, t.y - 1, t.z}] > 0
 		if below == rsBlock || below == leverOn {
 			fed = true
@@ -271,9 +276,9 @@ func (g *Game) recomputeRedstone() {
 		if fed {
 			ns = torchUnlit
 		}
-		if g.world.GetBlock(t.x, t.y, t.z) != ns {
-			g.world.SetBlock(t.x, t.y, t.z, ns)
-			g.recordBlockChange(t.x, t.y, t.z, ns)
+		if w.GetBlock(t.x, t.y, t.z) != ns {
+			w.SetBlock(t.x, t.y, t.z, ns)
+			g.setRS(dim, t.x, t.y, t.z, ns)
 		}
 	}
 	g.flushBlockUpdates()
@@ -318,13 +323,14 @@ var pistonStates = map[uint32]bool{2373: true, 2379: true, 2350: true, 2356: tru
 var stickyStates = map[uint32]bool{2350: true, 2356: true}
 
 // actPistons 红石重算后驱动活塞：邻通电伸出（推 1 方块），断电收回。
-func (g *Game) actPistons() {
+func (g *Game) actPistons(dim int32) {
+	w := g.wd(dim)
 	type ppos struct {
 		x, y, z int32
 		sticky  bool
 	}
 	var pistons []ppos
-	g.world.EachChunk(func(cx, cz int32, ch *world.Chunk) {
+	w.EachChunk(func(cx, cz int32, ch *world.Chunk) {
 		for i := int32(0); i < world.NumSections; i++ {
 			sec := ch.Section(i)
 			if sec == nil {
@@ -343,8 +349,8 @@ func (g *Game) actPistons() {
 		}
 	})
 	for _, pi := range pistons {
-		powered := g.posPowered(pi.x, pi.y, pi.z)
-		cur := g.world.GetBlock(pi.x, pi.y, pi.z)
+		powered := g.posPowered(dim, pi.x, pi.y, pi.z)
+		cur := w.GetBlock(pi.x, pi.y, pi.z)
 		extended := cur == pistonExt["north"] || cur == stickyExt["north"]
 		want := pistonRet["north"]
 		if pi.sticky {
@@ -353,15 +359,15 @@ func (g *Game) actPistons() {
 		if powered && !extended {
 			// 伸出：推前方方块 1 格（前方的前方须为空气）
 			fx, fy, fz := pi.x, pi.y, pi.z-1 // north 朝向 = -z
-			front := g.world.GetBlock(fx, fy, fz)
-			front2 := g.world.GetBlock(fx, fy, fz-1)
+			front := w.GetBlock(fx, fy, fz)
+			front2 := w.GetBlock(fx, fy, fz-1)
 			if front == world.StateAir {
 				// 直接伸（头出现在 front）
-				g.setRS(fx, fy, fz, pistonHeadN)
+				g.setRS(dim, fx, fy, fz, pistonHeadN)
 			} else if front2 == world.StateAir && front != world.StateBedrock &&
 				front != lampOn && front != lampOff { // 简单推动（不推红石设备）
-				g.setRS(fx, fy, fz-1, front)
-				g.setRS(fx, fy, fz, pistonHeadN)
+				g.setRS(dim, fx, fy, fz-1, front)
+				g.setRS(dim, fx, fy, fz, pistonHeadN)
 			} else {
 				continue // 推不动：不伸
 			}
@@ -369,31 +375,32 @@ func (g *Game) actPistons() {
 			if pi.sticky {
 				ext = stickyExt["north"]
 			}
-			g.setRS(pi.x, pi.y, pi.z, ext)
+			g.setRS(dim, pi.x, pi.y, pi.z, ext)
 			g.rsDirty = true
 		} else if !powered && extended {
 			// 收回：头消失；粘性把前方拉回
 			fx, fy, fz := pi.x, pi.y, pi.z-1
-			if g.world.GetBlock(fx, fy, fz) == pistonHeadN {
-				g.setRS(fx, fy, fz, world.StateAir)
+			if w.GetBlock(fx, fy, fz) == pistonHeadN {
+				g.setRS(dim, fx, fy, fz, world.StateAir)
 				if pi.sticky {
-					back := g.world.GetBlock(fx, fy, fz-1)
+					back := w.GetBlock(fx, fy, fz-1)
 					if back != world.StateAir && back != world.StateBedrock {
-						g.setRS(fx, fy, fz, back)
-						g.setRS(fx, fy, fz-1, world.StateAir)
+						g.setRS(dim, fx, fy, fz, back)
+						g.setRS(dim, fx, fy, fz-1, world.StateAir)
 					}
 				}
 			}
-			g.setRS(pi.x, pi.y, pi.z, want)
+			g.setRS(dim, pi.x, pi.y, pi.z, want)
 			g.rsDirty = true
 		}
 	}
 }
 
 // posPowered 位置邻接通电（线 power>0 / 点亮中继器 / 源）。
-func (g *Game) posPowered(x, y, z int32) bool {
+func (g *Game) posPowered(dim, x, y, z int32) bool {
+	w := g.wd(dim)
 	for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}} {
-		s := g.world.GetBlock(x+d[0], y+d[1], z+d[2])
+		s := w.GetBlock(x+d[0], y+d[1], z+d[2])
 		if s == rsBlock || s == leverOn || s == torchLit {
 			return true
 		}
@@ -408,12 +415,13 @@ func (g *Game) posPowered(x, y, z int32) bool {
 }
 
 // setRS 红石变更专用写（记录 + 不 ack）。
-func (g *Game) setRS(x, y, z int32, state uint32) {
-	if g.world.GetBlock(x, y, z) == state {
+func (g *Game) setRS(dim, x, y, z int32, state uint32) {
+	w := g.wd(dim)
+	if w.GetBlock(x, y, z) == state {
 		return
 	}
-	g.world.SetBlock(x, y, z, state)
-	g.recordBlockChange(x, y, z, state)
+	w.SetBlock(x, y, z, state)
+	g.recordBlockChange(dim, x, y, z, state)
 }
 
 // tickPistons 每次红石重算后驱动活塞。
@@ -421,7 +429,9 @@ func (g *Game) tickPistons() {
 	if g.tick%2 != 0 {
 		return
 	}
-	g.actPistons()
+	for dim := range g.dims {
+		g.actPistons(dim)
+	}
 }
 
 // ---- 比较器 / 观察者 ----
@@ -439,14 +449,15 @@ var comparatorStates = map[uint32]bool{13030: true, 13031: true, 13032: true, 13
 var observerStates = map[uint32]bool{16833: true, 16834: true}
 
 // comparatorSignal 比较器读后方容器强度：满格数 / 总格数 × 15（原版近似）。
-func (g *Game) comparatorSignal(x, y, z int32) int32 {
+func (g *Game) comparatorSignal(dim, x, y, z int32) int32 {
+	w := g.wd(dim)
 	// 后方（north 朝向 → 输入在 +z 侧，我们状态全部 north）
 	bx, by, bz := x, y, z+1
-	bs := g.world.GetBlock(bx, by, bz)
+	bs := w.GetBlock(bx, by, bz)
 	var filled, total float64
 	switch {
 	case bs == chestBlockState:
-		cs := g.chests[[3]int32{bx, by, bz}]
+		cs := g.chests[[4]int32{dim, bx, by, bz}]
 		if cs == nil {
 			return 0
 		}
@@ -457,7 +468,7 @@ func (g *Game) comparatorSignal(x, y, z int32) int32 {
 		}
 		total = chestSlots
 	case bs == furnaceLit || bs == furnaceUnlit:
-		fu := g.furnaces[[3]int32{bx, by, bz}]
+		fu := g.furnaces[[4]int32{dim, bx, by, bz}]
 		if fu == nil {
 			return 0
 		}
@@ -468,7 +479,7 @@ func (g *Game) comparatorSignal(x, y, z int32) int32 {
 		}
 		total = 3
 	case bs == brewingStandState:
-		br := g.brews[[3]int32{bx, by, bz}]
+		br := g.brews[[4]int32{dim, bx, by, bz}]
 		if br == nil {
 			return 0
 		}
@@ -489,8 +500,9 @@ func (g *Game) comparatorSignal(x, y, z int32) int32 {
 
 // actComparators 比较器：读后输入（容器强度或后方线 power）与侧输入比较。
 // 简化：compare 模式输出 = max(后-侧, 0)；subtract 模式输出 = 后-侧。
-func (g *Game) actComparators() {
-	g.world.EachChunk(func(cx, cz int32, ch *world.Chunk) {
+func (g *Game) actComparators(dim int32) {
+	w := g.wd(dim)
+	w.EachChunk(func(cx, cz int32, ch *world.Chunk) {
 		for i := int32(0); i < world.NumSections; i++ {
 			sec := ch.Section(i)
 			if sec == nil {
@@ -506,16 +518,16 @@ func (g *Game) actComparators() {
 				x := idx & 15
 				wx, wy, wz := cx*16+x, y+world.MinY, cz*16+z
 				// 后方强度：容器优先，否则后方线 power
-				back := g.comparatorSignal(wx, wy, wz)
+				back := g.comparatorSignal(dim, wx, wy, wz)
 				if back == 0 {
-					if p := rsWirePower(g.world.GetBlock(wx, wy, wz+1)); p > 0 {
+					if p := rsWirePower(w.GetBlock(wx, wy, wz+1)); p > 0 {
 						back = p
 					}
 				}
 				// 侧输入（东西侧线最大值）
 				side := int32(0)
 				for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}} {
-					if p := rsWirePower(g.world.GetBlock(wx+d[0], wy, wz+d[2])); p > side {
+					if p := rsWirePower(w.GetBlock(wx+d[0], wy, wz+d[2])); p > side {
 						side = p
 					}
 				}
@@ -538,8 +550,8 @@ func (g *Game) actComparators() {
 					want = comparatorSubOff
 				}
 				// 保持模式族（subtract/compare 切换由玩家右键，简化为不切）
-				if g.world.GetBlock(wx, wy, wz) != want {
-					g.setRS(wx, wy, wz, want)
+				if w.GetBlock(wx, wy, wz) != want {
+					g.setRS(dim, wx, wy, wz, want)
 					g.rsDirty = true
 				}
 			}
@@ -552,12 +564,14 @@ func (g *Game) tickComparators() {
 	if g.tick%2 != 0 {
 		return
 	}
-	g.actComparators()
+	for dim := range g.dims {
+		g.actComparators(dim)
+	}
 }
 
 // toggleComparator 右键比较器切 compare/subtract 模式。
 func (g *Game) toggleComparator(p *entity.Player, u packet.UseItemOn) bool {
-	s := g.world.GetBlock(u.X, u.Y, u.Z)
+	s := g.w(p).GetBlock(u.X, u.Y, u.Z)
 	var ns uint32
 	switch s {
 	case comparatorOn:
@@ -571,8 +585,9 @@ func (g *Game) toggleComparator(p *entity.Player, u packet.UseItemOn) bool {
 	default:
 		return false
 	}
-	g.applyBlock(u.X, u.Y, u.Z, ns, u.Sequence, p)
+	g.applyBlock(p.Dim, u.X, u.Y, u.Z, ns, u.Sequence, p)
 	g.rsDirty = true
+	g.blockSound(p.Dim, float64(u.X), float64(u.Y), float64(u.Z), "block.comparator.click")
 	if u.Sequence > 0 {
 		p.Send.SendPlay("minecraft:block_changed_ack", func(w *protocol.Writer) {
 			packet.WriteBlockChangedAck(w, u.Sequence)
@@ -583,19 +598,20 @@ func (g *Game) toggleComparator(p *entity.Player, u packet.UseItemOn) bool {
 
 // 观察者：检测"面前"方块变化（朝 north=面前 -z）→ 短脉冲。
 // 简化：方块更新调度时若触及观察者面前 → 点亮 2 刻后自动灭。
-func (g *Game) scheduleObserverCheck(x, y, z int32) {
+func (g *Game) scheduleObserverCheck(dim, x, y, z int32) {
+	w := g.wd(dim)
 	for _, d := range [][3]int32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}} {
 		nx, ny, nz := x+d[0], y+d[1], z+d[2]
-		if !observerStates[g.world.GetBlock(nx, ny, nz)] {
+		if !observerStates[w.GetBlock(nx, ny, nz)] {
 			continue
 		}
 		// 观察者面前是 (x,y,z)？north 朝向面前 = -z 方向的邻居
-		if g.world.GetBlock(nx, ny, nz-1) == g.world.GetBlock(x, y, z) || (nx == x && ny == y && nz-1 == z) {
+		if w.GetBlock(nx, ny, nz-1) == w.GetBlock(x, y, z) || (nx == x && ny == y && nz-1 == z) {
 			// 面前变化 → 脉冲
-			if g.world.GetBlock(nx, ny, nz) == observerOff {
-				g.setRS(nx, ny, nz, observerOn)
+			if w.GetBlock(nx, ny, nz) == observerOff {
+				g.setRS(dim, nx, ny, nz, observerOn)
 				g.rsDirty = true
-				g.observerPulse = append(g.observerPulse, [4]int32{nx, ny, nz, int32(g.tick) + 2})
+				g.observerPulse = append(g.observerPulse, [5]int32{dim, nx, ny, nz, int32(g.tick) + 2})
 			}
 		}
 	}
@@ -606,11 +622,11 @@ func (g *Game) tickObservers() {
 	if g.tick%2 != 0 || len(g.observerPulse) == 0 {
 		return
 	}
-	var remain [][4]int32
+	var remain [][5]int32
 	for _, op := range g.observerPulse {
-		if int32(g.tick) >= op[3] {
-			if g.world.GetBlock(op[0], op[1], op[2]) == observerOn {
-				g.setRS(op[0], op[1], op[2], observerOff)
+		if int32(g.tick) >= op[4] {
+			if g.wd(op[0]).GetBlock(op[1], op[2], op[3]) == observerOn {
+				g.setRS(op[0], op[1], op[2], op[3], observerOff)
 				g.rsDirty = true
 			}
 		} else {

@@ -288,7 +288,7 @@ func TestFurnaceSmelting(t *testing.T) {
 	if fs.find("minecraft:open_screen") == nil {
 		t.Fatal("应发送 open_screen")
 	}
-	pos := [3]int32{8, -61, 8}
+	pos := [4]int32{DimOverworld, 8, -61, 8}
 	fu := g.furnaces[pos]
 	fu.input = entity.Item{ID: ids["sand"], Count: 2}
 	fu.fuel = entity.Item{ID: ids["coal"], Count: 1}
@@ -326,7 +326,7 @@ func TestFurnacePersistence(t *testing.T) {
 	g.Cfg.SaveDir = dir
 	g.smelting = assets.Smelting(777)
 	ids := assets.ItemIDs(777)
-	g.furnaces[[3]int32{1, 2, 3}] = &furnaceState{
+	g.furnaces[[4]int32{DimOverworld, 1, 2, 3}] = &furnaceState{
 		input: entity.Item{ID: ids["sand"], Count: 5}, burn: 99, burnMax: 100, cook: 42}
 	g.saveFurnaces()
 
@@ -334,7 +334,7 @@ func TestFurnacePersistence(t *testing.T) {
 	g2.Cfg.SaveDir = dir
 	g2.smelting = assets.Smelting(777)
 	g2.loadFurnaces()
-	fu := g2.furnaces[[3]int32{1, 2, 3}]
+	fu := g2.furnaces[[4]int32{DimOverworld, 1, 2, 3}]
 	if fu == nil || fu.input.Count != 5 || fu.cook != 42 {
 		t.Fatalf("熔炉读档不符: %+v", fu)
 	}
@@ -346,7 +346,7 @@ func TestFurnaceDropOnBreak(t *testing.T) {
 	g.smelting = assets.Smelting(777)
 	ids := assets.ItemIDs(777)
 	g.world.SetBlock(8, -60, 8, furnaceUnlit)
-	pos := [3]int32{8, -60, 8}
+	pos := [4]int32{DimOverworld, 8, -60, 8}
 	g.furnaces[pos] = &furnaceState{input: entity.Item{ID: ids["sand"], Count: 3}}
 	g.handleDig(&blockDigEvent{p: p, act: packet.PlayerAction{Status: packet.DigFinish, X: 8, Y: -60, Z: 8, Sequence: 1}})
 	if _, exists := g.furnaces[pos]; exists {

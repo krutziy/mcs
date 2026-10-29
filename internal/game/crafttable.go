@@ -26,7 +26,7 @@ func (g *Game) tryOpenCrafting(p *entity.Player, u packet.UseItemOn) bool {
 	if !ok {
 		return false
 	}
-	if g.world.GetBlock(u.X, u.Y, u.Z) != tableState {
+	if g.w(p).GetBlock(u.X, u.Y, u.Z) != tableState {
 		return false
 	}
 	if _, exists := g.crafting[p.EntityID]; exists {
@@ -51,7 +51,7 @@ func (g *Game) closeCrafting(p *entity.Player) {
 			continue
 		}
 		if n := g.giveItem(p, it); n < it.Count {
-			g.spawnItem(p.X, p.Y+1, p.Z, entity.Item{ID: it.ID, Count: it.Count - n})
+			g.spawnItem(p.Dim, p.X, p.Y+1, p.Z, entity.Item{ID: it.ID, Count: it.Count - n})
 		}
 	}
 	p.Send.SendPlay("minecraft:container_close", func(w *protocol.Writer) {
