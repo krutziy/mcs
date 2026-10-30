@@ -77,6 +77,11 @@ type Player struct {
 	EatTicks    int32   // 进食进度（32 刻 = 1.6 秒；<0 未进食）
 	EatItem     int32   // 进食中的物品快照（ID 变化则中断）
 
+	// 弓蓄力（≥0 计时中；-1 未拉）与末影珍珠冷却
+	BowTicks int32
+	PearlCd  int32
+	Drinking bool // 正在饮用（与进食共用计时通道）
+
 	// 挖掘时长校验（生存模式 start 记录 → finish 校验）
 	DigActive   bool
 	DigX, DigY, DigZ int32

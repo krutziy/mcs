@@ -51,7 +51,13 @@ func (g *Game) handleUseItem(ev *playerUseItemEvent) {
 			packet.WriteBlockChangedAck(w, ev.sequence)
 		})
 	}
-	if g.drinkPotion(p) {
+	if g.handleBowUse(ev) || g.handleThrowUse(ev) {
+		return
+	}
+	if g.tryEquipArmor(ev) {
+		return
+	}
+	if g.startDrinkingPotion(p) {
 		return
 	}
 	held := p.Held()
@@ -67,9 +73,39 @@ func (g *Game) handleUseItem(ev *playerUseItemEvent) {
 	p.EatItem = held.ID
 }
 
-// handleReleaseUse 处理 player_action release_use_item：进食中断。
+// handleReleaseUse 处理 player_action release_use_item：松开右键——
+// 拉弓中发射箭，进食/饮用中断。
 func (g *Game) handleReleaseUse(p *entity.Player) {
+	if p.BowTicks >= 0 {
+		g.fireBow(p)
+		return
+	}
 	p.EatTicks = -1
+	p.Drinking = false
+}
+
+// startDrinkingPotion 药水改为 32 刻计时饮用（与进食共用 EatTicks 通道，
+// Drinking 标记区分结算路径）。返回 true 表示已拦截。
+func (g *Game) startDrinkingPotion(p *entity.Player) bool {
+	held := p.Held()
+	if held.ID == 0 {
+		return false
+	}
+	name := g.itemNameOf(p, held.ID)
+	if name != "potion" && name != "splash_potion" && name != "lingering_potion" &&
+		name != "milk_bucket" && name != "honey_bottle" {
+		return false
+	}
+	if name != "potion" {
+		return false // 喷溅/滞留药水投掷暂不实现；牛奶等后续
+	}
+	if p.Drinking && p.EatTicks >= 0 {
+		return true // 已在饮用
+	}
+	p.EatTicks = 0
+	p.EatItem = held.ID
+	p.Drinking = true
+	return true
 }
 
 // tickEating 推进所有玩家进食计时：手持物品变化/死亡即中断，
@@ -92,8 +128,13 @@ func (g *Game) tickEating() {
 		if p.EatTicks < eatDurationTicks {
 			continue
 		}
-		// 完成：结算（此时可能已满饥饿——原版开始后仍会吃完）
+		// 完成：饮用走药水结算，食物走营养结算
 		p.EatTicks = -1
+		if p.Drinking {
+			p.Drinking = false
+			g.drinkPotion(p)
+			continue
+		}
 		def, ok := foodItems[g.itemNameOf(p, held.ID)]
 		if !ok {
 			continue

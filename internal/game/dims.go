@@ -64,6 +64,9 @@ func (g *Game) switchDimension(p *entity.Player, to int32, x, y, z float64) {
 	if _, ok := g.dims[to]; !ok || to == p.Dim {
 		return
 	}
+	if to == DimEnd {
+		g.ensureDragonFight()
+	}
 	old := p.Dim
 	sess := g.sessionOf(p)
 	// 记住旧维度位置（同维度往返时恢复）

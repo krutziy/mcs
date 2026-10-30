@@ -70,6 +70,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		blockNames:    assets.BlockNames(777),
 		stacks:        assets.ItemStacks(777),
 		hardness:      assets.BlockHardness(777),
+		toolClass:     assets.ToolClasses(777),
 		mineable:      map[int32]map[uint32]uint8{777: assets.MineableMask(777)},
 		pickaxes:      map[int32]map[int32]uint8{777: assets.PickaxeBits(777)},
 		items:         map[int32]*itemEntity{},
@@ -83,7 +84,11 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		saplings:      map[[4]int32]int32{},
 		orbs:          map[int32]*xpOrb{},
 		arrows:        map[int32]*arrow{},
+		thrown:         map[int32]*thrownProjectile{},
+		crystals:       map[int32]*endCrystal{},
 		creepers:      map[int32]*creeperFuse{},
+		tnts:          map[int32]*primedTnt{},
+		fires:         map[[4]int32]int32{},
 		breeds:        map[int32]*breedState{},
 		crops:         map[[4]int32]int32{},
 		bushes:        map[[4]int32]int32{},
@@ -95,6 +100,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		pendingBlocks: map[[4]int32]uint32{},
 		drags:         map[int32]*dragState{},
 	}
+	g.loadFacingTables()
 	g.soundIDs = map[int32]map[string]int32{777: assets.Sounds(777), 776: assets.Sounds(776), 774: assets.Sounds(774)}
 	g.soundIDs[775] = g.soundIDs[776]
 	g.dims = map[int32]*world.Manager{DimOverworld: g.world,
@@ -108,6 +114,7 @@ func newTestGame(mode packet.GameMode) (*Game, *entity.Player, *fakeSender) {
 		SentChunks: map[[2]int32]bool{{0, 0}: true},
 	}
 	p.Health, p.Food, p.Saturation = 20, 20, 5
+	p.EatTicks, p.BowTicks = -1, -1
 	p.Effects, p.EffectAmp = map[string]int32{}, map[string]int32{}
 	p.PotionOf = map[[2]int32]string{}
 	p.GameMode = int32(mode)
@@ -157,7 +164,7 @@ func TestDigSurvivalTiming(t *testing.T) {
 	if len(fs.sent) != 0 {
 		t.Fatalf("生存模式 start 不应发包，实际 %v", fs.names())
 	}
-	// 徒手挖石头需 ~225 刻（硬度 1.5 × 100 / 速度 1）；推进足够时间后再 finish
+	// 徒手挖石头需 150 刻（硬度 1.5 × 100 / 速度 1）；推进足够时间后再 finish
 	g.tick += 300
 	g.handleDig(&blockDigEvent{p: p, act: packet.PlayerAction{Status: packet.DigFinish, X: 8, Y: -60, Z: 8, Sequence: 2}})
 	if got := g.world.GetBlock(8, -60, 8); got != world.StateAir {

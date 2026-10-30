@@ -354,6 +354,30 @@ func main() {
 		}
 	}
 
+		var expandTag func(name string, depth int) []string
+	expandTag = func(name string, depth int) []string {
+		if depth > 4 {
+			return nil
+		}
+		var tl struct{ Values []interface{} }
+		if !readZipJSON(z, "data/minecraft/tags/block/"+strings.TrimPrefix(name, "minecraft:")+".json", &tl) {
+			return nil
+		}
+		var out []string
+		for _, v := range tl.Values {
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			if strings.HasPrefix(s, "#") {
+				out = append(out, expandTag(strings.TrimPrefix(s, "#"), depth+1)...)
+			} else {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+
 	// --- 需镐门槛：材质位掩码（官方 incorrect_for_<材质>_tool 反向标签）---
 	// bit0=木/金 bit1=石 bit2=铜 bit3=铁 bit4=钻 bit5=下界合金（合金与钻同级）
 	materialBit := map[string]int{
@@ -363,24 +387,13 @@ func main() {
 	incorrect := map[string]map[string]bool{} // 材质 → 采不动方块集合
 	for _, mat := range []string{"wooden", "stone", "copper", "iron", "diamond"} {
 		set := map[string]bool{}
-		var tl struct{ Values []interface{} }
-		if readZipJSON(z, "data/minecraft/tags/block/incorrect_for_"+mat+"_tool.json", &tl) {
-			for _, v := range tl.Values {
-				if s, ok := v.(string); ok {
-					set[s] = true
-				}
-			}
+		for _, n := range expandTag("minecraft:incorrect_for_"+mat+"_tool", 0) {
+			set[n] = true
 		}
 		incorrect[mat] = set
 	}
-	var pickaxeTag struct{ Values []interface{} }
-	readZipJSON(z, "data/minecraft/tags/block/mineable/pickaxe.json", &pickaxeTag)
 	var mineableLines []string
-	for _, v := range pickaxeTag.Values {
-		name, ok := v.(string)
-		if !ok {
-			continue
-		}
+	for _, name := range expandTag("minecraft:mineable/pickaxe", 0) {
 		b, ok := blocks[name]
 		if !ok || len(b.States) == 0 {
 			continue
@@ -393,6 +406,26 @@ func main() {
 		}
 		for _, s := range b.States {
 			mineableLines = append(mineableLines, fmt.Sprintf("%d %d", s.ID, mask))
+		}
+	}
+
+	// --- 方块工具类别（mineable/{axe,shovel,hoe} 标签；pickaxe 已有 mineable 表）---
+	// blocktoolclass_<proto>.txt：状态 ID → 1斧 2锹 3锄（镐 = mineable 表）
+	// 标签值递归展开（#minecraft:logs 等嵌套引用）。
+	var toolClassLines []string
+	toolClasses := []struct {
+		tag  string
+		code int
+	}{{"axe", 1}, {"shovel", 2}, {"hoe", 3}}
+	for _, tc := range toolClasses {
+		for _, name := range expandTag("minecraft:mineable/"+tc.tag, 0) {
+			b, ok := blocks[name]
+			if !ok || len(b.States) == 0 {
+				continue
+			}
+			for _, st := range b.States {
+				toolClassLines = append(toolClassLines, fmt.Sprintf("%d %d", st.ID, tc.code))
+			}
 		}
 	}
 
@@ -509,6 +542,8 @@ func main() {
 	write(fmt.Sprintf("mineable_%d.txt", *proto), mineableLines)
 	write(fmt.Sprintf("pickaxes_%d.txt", *proto), pickaxeLines)
 	write(fmt.Sprintf("mobdrops_%d.txt", *proto), mobLines)
+	sort.Strings(toolClassLines)
+	write(fmt.Sprintf("blocktoolclass_%d.txt", *proto), toolClassLines)
 	if len(stackLines) > 0 {
 		write(fmt.Sprintf("itemstack_%d.txt", *proto), stackLines)
 	}

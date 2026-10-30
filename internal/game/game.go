@@ -68,6 +68,7 @@ type Game struct {
 	stacks        map[string]int32           // 物品短名 → 最大堆叠（777 基准）
 	soundIDs      map[int32]map[string]int32  // 协议 → 音效短名 → 注册表 ID
 	hardness      map[string]float64         // 方块短名 → 硬度
+	toolClass     map[uint32]uint8            // 方块状态 → 工具类别（1斧 2锹 3锄）
 	recipes      []craftRecipe           // 合成配方（基准版本）
 	itemTags     map[string]map[string]bool // 物品标签（配方匹配用）
 	crafting     map[int32]*craftState     // 打开中的工作台（按玩家 EID）
@@ -85,10 +86,15 @@ type Game struct {
 	raining      bool                     // 天气
 	rainTimer    int                      // 雨剩余决策周期
 	orbs         map[int32]*xpOrb          // 经验球实体
-	arrows       map[int32]*arrow         // 箭矢实体
-	creepers     map[int32]*creeperFuse   // 苦力怕引信
+	arrows       map[int32]*arrow
+	thrown       map[int32]*thrownProjectile // 玩家投掷物（雪球/鸡蛋/珍珠）         // 箭矢实体
+	creepers     map[int32]*creeperFuse
+	tnts         map[int32]*primedTnt    // 点燃的 TNT
+	fires        map[[4]int32]int32      // 火方块（维度+位置 → 寿命刻）   // 苦力怕引信
 	leafQueue    [][4]int32               // 待枯萎判定的叶子（维度+坐标）
 	breeds       map[int32]*breedState    // 动物繁殖状态
+	sheared      map[int32]bool           // 已剪毛的羊
+	mobPaths     map[int32]*mobPathState   // 生物寻路缓存
 	crops        map[[4]int32]int32       // 小麦作物（维度+位置）
 	bushes       map[[4]int32]int32       // 浆果丛（维度+位置 → 年龄）
 	brews        map[[4]int32]*brewingState // 酿造台（维度+位置）
@@ -103,6 +109,9 @@ type Game struct {
 	itemNameCache map[int32]string         // 777 物品 ID → 短名（缓存）
 	pendingBlocks map[[4]int32]uint32       // 待广播的方块变更（维度+坐标）
 	drags         map[int32]*dragState     // 进行中的容器拖拽（玩家 EID → 状态）
+	dragon        *dragonState             // 末影龙战（nil = 未激活）
+	crystals      map[int32]*endCrystal    // 末影水晶
+	dragonDefeated bool                    // 龙已被击败（endstate.json）
 
 	closed atomic.Bool
 }
@@ -122,6 +131,8 @@ func New(cfg Config, suite *version.Suite) *Game {
 		furnaces:       map[[4]int32]*furnaceState{},
 		openFurnace:    map[int32][4]int32{},
 		breeds:         map[int32]*breedState{},
+		sheared:        map[int32]bool{},
+		mobPaths:       map[int32]*mobPathState{},
 		crops:          map[[4]int32]int32{},
 		bushes:         map[[4]int32]int32{},
 		brews:         map[[4]int32]*brewingState{},
@@ -132,7 +143,10 @@ func New(cfg Config, suite *version.Suite) *Game {
 		openChest:      map[int32][4]int32{},
 		orbs:           map[int32]*xpOrb{},
 		arrows:         map[int32]*arrow{},
+		thrown:         map[int32]*thrownProjectile{},
 		creepers:       map[int32]*creeperFuse{},
+		tnts:           map[int32]*primedTnt{},
+		fires:          map[[4]int32]int32{},
 		fallings:       map[int32]*fallingBlock{},
 		saplings:       map[[4]int32]int32{},
 		dayTime:        6000, // 正午
@@ -145,11 +159,13 @@ func New(cfg Config, suite *version.Suite) *Game {
 		itemNames:      map[int32]map[int32]string{},
 		pendingBlocks:  map[[4]int32]uint32{},
 		drags:          map[int32]*dragState{},
+		crystals:       map[int32]*endCrystal{},
 	}
 	g.blockDrops = assets.BlockDropsEx(777)
 	g.mobDrops = assets.MobDropsEx(777)
 	g.stacks = assets.ItemStacks(777)
 	g.hardness = assets.BlockHardness(777)
+	g.toolClass = assets.ToolClasses(777)
 	g.soundIDs = map[int32]map[string]int32{}
 	for _, v := range version.All() {
 		p := int32(v.Protocol)
@@ -265,6 +281,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 	g.loadWeather()
 	g.loadChests()
 	g.loadBrewings()
+	g.loadEndState()
 	g.loadInteractTables()
 	}
 	// 世界类型由注册表解析：核心只有虚空，地形等由插件提供
@@ -277,6 +294,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 			g.Cfg.SpawnY = 0
 		}
 	}
+	g.loadFacingTables()
 	g.nextEID.Store(100)
 	go g.run()
 	return g
@@ -341,7 +359,11 @@ func (g *Game) tickNow() {
 	g.tickSaplings()
 	g.tickOrbs()
 	g.tickArrows()
+	g.tickThrown()
+	g.tickBowCharging()
 	g.tickCreepers()
+	g.tickTnts()
+	g.tickFires()
 	g.tickUndeadBurn()
 	g.tickLeafDecay()
 	g.tickWeather()
@@ -353,6 +375,7 @@ func (g *Game) tickNow() {
 	g.tickEnvironmental()
 	g.tickEating()
 	g.tickPortals()
+	g.tickDragon()
 	g.tickMobSounds()
 	g.tickRedstone()
 	g.tickPistons()

@@ -200,6 +200,28 @@ func EndNoise(x, y float64, seed int64) float64 {
 	return hash2(int64(x*8), int64(y*8), seed+5)*2 - 1
 }
 
+// EndPillar 末地黑曜石柱（确定性，供生成与水晶放置共用）。
+type EndPillar struct {
+	X, Z    int32
+	TopRel  int32 // 柱顶相对高度
+	Radius  int32
+}
+
+// EndPillars 黑曜石柱环（半径 40，10 根，高度起伏）。
+func EndPillars(seed int64) []EndPillar {
+	out := make([]EndPillar, 0, 10)
+	for i := 0; i < 10; i++ {
+		angle := float64(i) / 10 * 2 * math.Pi
+		r := float64(40) + (hash2(int64(i), 7, seed+303)-0.5)*8
+		x := int32(math.Round(math.Cos(angle) * r))
+		z := int32(math.Round(math.Sin(angle) * r))
+		top := 92 + int32(hash2(int64(i*13), 5, seed+404)*18)
+		rad := int32(2 + int(hash2(int64(i), 99, seed+505)*1.999))
+		out = append(out, EndPillar{x, z, top, rad})
+	}
+	return out
+}
+
 // 末地黑曜石平台：绝对 (98..102, y, 0..4)，相对 y=84。
 const (
 	endPlatformRel = 84
@@ -233,6 +255,27 @@ func (g EndGenerator) Generate(ch *world.Chunk) {
 		}
 		ch.SetBlock(0, top, 0, world.StateBedrock)
 		ch.SetBlock(0, top+1, 0, 11202) // minecraft:end_portal
+	}
+	// 黑曜石柱环
+	for _, pl := range EndPillars(g.Seed) {
+		px, pz := pl.X-ch.CX*16, pl.Z-ch.CZ*16
+		if px+pl.Radius < 0 || px-pl.Radius > 15 || pz+pl.Radius < 0 || pz-pl.Radius > 15 {
+			continue
+		}
+		for dx := -pl.Radius; dx <= pl.Radius; dx++ {
+			for dz := -pl.Radius; dz <= pl.Radius; dz++ {
+				if dx*dx+dz*dz > pl.Radius*pl.Radius {
+					continue
+				}
+				x, z := px+dx, pz+dz
+				if x < 0 || x > 15 || z < 0 || z > 15 {
+					continue
+				}
+				for y := int32(74); y <= pl.TopRel; y++ {
+					ch.SetBlock(x, y, z, world.StateObsidian)
+				}
+			}
+		}
 	}
 	// 黑曜石抵达平台（出生点）
 	if ch.CX == 6 && ch.CZ == 0 {

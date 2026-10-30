@@ -46,6 +46,19 @@ func (g *Game) playSoundAt(dim int32, x, y, z float64, category int32, name stri
 		if !ok {
 			continue
 		}
+		// 距离衰减：听者越远音量越低（原版 max(volume,1)×16 格可闻）
+		d := dist2(v.X, v.Y+1.6, v.Z, x, y, z)
+		reach := float64(volume)
+		if reach < 1 {
+			reach = 1
+		}
+		vol := volume * float32(1-d/(reach*16*reach*16))
+		if d > reach*16*reach*16 {
+			continue // 超出可闻范围
+		}
+		if vol < 0.02 {
+			continue
+		}
 		sid, cat := id, category
 		v.Send.SendPlay("minecraft:sound", func(w *protocol.Writer) {
 			w.VarInt(sid)
@@ -53,7 +66,7 @@ func (g *Game) playSoundAt(dim int32, x, y, z float64, category int32, name stri
 			w.Int32(ix)
 			w.Int32(iy)
 			w.Int32(iz)
-			w.Float(volume)
+			w.Float(vol)
 			w.Float(pitch)
 			w.Int64(seed)
 		})

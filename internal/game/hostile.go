@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 
+	"mcserver/internal/assets"
 	"mcserver/internal/protocol"
 
 	"mcserver/internal/entity"
@@ -40,6 +41,8 @@ type arrow struct {
 	x, y, z    float64
 	vx, vy, vz float64
 	age        int
+	dmg        float32
+	crit       bool
 }
 
 // tickHostileAI 敌对生物扩展行为：骷髅射箭、苦力怕引信。
@@ -88,7 +91,8 @@ func (g *Game) shootArrow(m *mob, target *entity.Player) {
 	speed := 0.4
 	ar := &arrow{eid: eid, owner: m.eid, dim: m.dim,
 		x: m.x, y: m.y + 1.5, z: m.z,
-		vx: dx / d * speed, vy: dy/d*speed + d*0.02, vz: dz / d * speed}
+		vx: dx / d * speed, vy: dy/d*speed + d*0.02, vz: dz / d * speed,
+		dmg: 3}
 	ar.uuid = entityUUID(eid)
 	g.arrows[eid] = ar
 	for _, v := range g.chunkViewers(m.dim, int32(m.x)>>4, int32(m.z)>>4) {
@@ -129,7 +133,7 @@ func (g *Game) tickArrows() {
 					continue
 				}
 				if math.Abs(p.X-sx) < 0.7 && math.Abs(p.Z-sz) < 0.7 && sy > p.Y && sy < p.Y+2.0 {
-					g.damage(p, 3, damageArrow)
+					g.damage(p, ar.dmg, damageArrow)
 					g.removeArrow(eid)
 					removed = true
 					break
@@ -138,12 +142,43 @@ func (g *Game) tickArrows() {
 			if removed {
 				break
 			}
+			// 箭射水晶
+			if _, hit := g.crystalsHitCheck(sx, sy, sz); hit {
+				g.removeArrow(eid)
+				removed = true
+				break
+			}
+			// 箭射龙
+			if g.dragon != nil && g.dragon.dim == ar.dim &&
+				math.Abs(g.dragon.px-sx) < 5 && math.Abs(g.dragon.pz-sz) < 5 &&
+				sy > g.dragon.y-2 && sy < g.dragon.y+4 {
+				g.damageDragon(ar.dmg, nil)
+				g.removeArrow(eid)
+				removed = true
+				break
+			}
 			for mid, m := range g.mobs {
 				if mid == ar.owner || m.dim != ar.dim {
 					continue
 				}
 				if math.Abs(m.x-sx) < 0.8 && math.Abs(m.z-sz) < 0.8 && sy > m.y && sy < m.y+2.0 {
-					m.health -= 3
+					dmg := ar.dmg
+					if ar.crit {
+						dmg *= 1.5
+						mid2 := m.eid
+						for _, v := range g.players {
+							if v.Dim != m.dim {
+								continue
+							}
+							v.Send.SendPlay("minecraft:entity_event", func(w *protocol.Writer) {
+								packet.WriteEntityEvent(w, mid2, 7)
+							})
+						}
+					}
+					m.health -= dmg
+					if n := mobHurtSoundName(m.kind.name); n != "" {
+						g.mobSound(m, n)
+					}
 					if m.health <= 0 {
 						g.killMob(m, nil)
 					}
@@ -408,8 +443,13 @@ func (g *Game) tickLeafDecay() {
 	g.flushBlockUpdates()
 }
 
-// itemID777 777 基准物品名 → ID（熔炉已有 itemNameOf777 反向缓存）。
+// itemID777 777 基准物品名 → ID（首次调用时填充缓存；未知名 0）。
 func (g *Game) itemID777(name string) int32 {
+	if len(itemNameToID777) == 0 {
+		for n, id := range assets.ItemIDs(777) {
+			itemNameToID777[n] = id
+		}
+	}
 	return itemNameToID777[name]
 }
 

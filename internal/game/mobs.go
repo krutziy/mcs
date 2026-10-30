@@ -93,6 +93,7 @@ func (g *Game) sendMobSpawn(p *entity.Player, m *mob) {
 // removeMob 移除生物（死亡/消散）。
 func (g *Game) removeMob(m *mob) {
 	delete(g.mobs, m.eid)
+	delete(g.mobPaths, m.eid)
 	eid := m.eid
 	for _, p := range g.players {
 		if p.Dim != m.dim {
@@ -228,6 +229,21 @@ func (g *Game) handleAttack(ev *playerAttackEvent) {
 	if crit {
 		dmg *= 1.5
 	}
+	// 打末影水晶
+	if c, ok := g.crystals[ev.target]; ok {
+		if dist2(p.X, p.Y, p.Z, c.x, c.y, c.z) <= 100 {
+			g.destroyCrystal(c, p)
+			return
+		}
+	}
+	// 打末影龙
+	if g.dragon != nil && ev.target == g.dragon.eid {
+		if dist2(p.X, p.Y, p.Z, g.dragon.px, g.dragon.y, g.dragon.pz) <= 100 {
+			g.damageDragon(dmg, p)
+			g.playSoundTo(p, SoundHostile, "entity.ender_dragon.hurt", 1, 1)
+			return
+		}
+	}
 	// 打生物
 	if m, ok := g.mobs[ev.target]; ok {
 		if dist2(p.X, p.Y, p.Z, m.x, m.y, m.z) > 36 {
@@ -290,6 +306,7 @@ func (g *Game) playerInWater(p *entity.Player) bool {
 // killMob 生物死亡：动画、移除、掉落（数量按官方战利品表范围随机）。
 func (g *Game) killMob(m *mob, by *entity.Player) {
 	eid := m.eid
+	wasSheared := g.sheared[eid]
 	for _, v := range g.players {
 		v.Send.SendPlay("minecraft:entity_event", func(w *protocol.Writer) {
 			packet.WriteEntityEvent(w, eid, 3)
@@ -299,6 +316,11 @@ func (g *Game) killMob(m *mob, by *entity.Player) {
 		})
 	}
 	delete(g.mobs, eid)
+	delete(g.sheared, eid)
+	// 羊未剪毛时额外掉 1 羊毛（原版行为）
+	if m.kind.name == "sheep" && !wasSheared {
+		g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: g.itemID777("white_wool"), Count: 1})
+	}
 	if d, ok := g.mobDrops[m.kind.name]; ok {
 		n := d.Min
 		if d.Max > d.Min {

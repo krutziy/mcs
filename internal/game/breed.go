@@ -5,6 +5,8 @@ package game
 // 食物对应（公开数值）：麦类→牛/羊、胡萝卜→猪、种子→鸡。
 
 import (
+	"math/rand"
+
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
 	"mcserver/internal/protocol"
@@ -33,6 +35,18 @@ func (g *Game) handleInteract(ev *playerInteractEvent) {
 	}
 	m, ok := g.mobs[ev.target]
 	if !ok {
+		return
+	}
+	// 剪刀剪羊：掉 1-3 羊毛 + 受损
+	if held := p.Held(); held.ID != 0 && g.itemNameOf(p, held.ID) == "shears" {
+		if m.kind.name == "sheep" && !g.sheared[ev.target] {
+			g.sheared[ev.target] = true
+			n := int32(1 + rand.Intn(3))
+			g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: g.itemID777("white_wool"), Count: n})
+			g.mobSound(m, "entity.sheep.shear")
+			g.damageHeld(p)
+			g.sendSheepSheared(m)
+		}
 		return
 	}
 	foods, breedable := breedFoods[m.kind.name]
@@ -124,6 +138,16 @@ func (g *Game) tickBreeds() {
 		if bs.loveCd == 0 && !bs.baby {
 			delete(g.breeds, eid)
 		}
+	}
+}
+
+// sendSheepSheared 羊被剪毛的视觉（原版元数据变体缺失，用粒子替代）。
+func (g *Game) sendSheepSheared(m *mob) {
+	for _, v := range g.chunkViewers(m.dim, int32(m.x)>>4, int32(m.z)>>4) {
+		x, y, z := int32(m.x), int32(m.y+1), int32(m.z)
+		v.Send.SendPlay("minecraft:level_event", func(w *protocol.Writer) {
+			packet.WriteLevelEvent(w, 2001, x, y, z, int32(g.stateFor(v, 250)), false)
+		})
 	}
 }
 

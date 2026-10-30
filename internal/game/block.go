@@ -126,6 +126,43 @@ func (g *Game) digDrops(p *entity.Player, state uint32) []entity.Item {
 			return nil
 		}
 	}
+	// 多池/概率掉落的原版修正（掉落表资产只取首个常规条目）
+	if name := g.blockNames[state]; name != "" {
+		switch name {
+		case "gravel":
+			// 10% 燧石（时运 I/II/III → 14.3%/25%/100%）
+			chance := float32(0.1)
+			if fl := g.heldEnchantLevel(p, "fortune"); fl > 0 {
+				chance = []float32{0.1, 0.14285715, 0.25, 1}[minI32(fl, 3)]
+			}
+			if rand.Float32() < chance {
+				return []entity.Item{{ID: g.itemID777("flint"), Count: 1}}
+			}
+			return []entity.Item{{ID: g.itemID777("gravel"), Count: 1}}
+		case "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
+			"acacia_leaves", "dark_oak_leaves", "cherry_leaves", "mangrove_leaves":
+			if g.heldEnchantLevel(p, "silk_touch") > 0 || g.itemNameOf(p, p.Held().ID) == "shears" {
+				return []entity.Item{{ID: g.itemID777(name[:len(name)-7]), Count: 1}}
+			}
+			out := []entity.Item{}
+			if rand.Intn(20) == 0 { // 树苗 5%
+				sapling := map[string]string{"oak_leaves": "oak_sapling", "birch_leaves": "birch_sapling",
+					"spruce_leaves": "spruce_sapling", "jungle_leaves": "jungle_sapling",
+					"acacia_leaves": "acacia_sapling", "dark_oak_leaves": "dark_oak_sapling",
+					"cherry_leaves": "cherry_sapling", "mangrove_leaves": "mangrove_propagule"}[name]
+				out = append(out, entity.Item{ID: g.itemID777(sapling), Count: 1})
+			}
+			if rand.Intn(50) == 0 { // 木棍 2%
+				out = append(out, entity.Item{ID: g.itemID777("stick"), Count: 1})
+			}
+			return out
+		case "short_grass", "fern", "tall_grass":
+			if rand.Intn(8) == 0 { // 种子 12.5%
+				return []entity.Item{{ID: g.itemID777("wheat_seeds"), Count: 1}}
+			}
+			return nil
+		}
+	}
 	d, ok := g.blockDrops[state]
 	if !ok {
 		return nil
@@ -176,7 +213,10 @@ func (g *Game) digExpectedTicks(p *entity.Player, state uint32) int32 {
 		return 0
 	}
 	heldName := g.itemNameOf(p, p.Held().ID)
-	speed := toolSpeed(heldName)
+	speed := float64(1)
+	if g.toolMatches(p, state, heldName) {
+		speed = toolSpeed(heldName) // 类别匹配才有材质倍率
+	}
 	if lv := g.heldEnchantLevel(p, "efficiency"); lv > 0 {
 		speed += float64(lv*lv) + 1
 	}
@@ -186,19 +226,46 @@ func (g *Game) digExpectedTicks(p *entity.Player, state uint32) int32 {
 		bit, isPick := g.pickaxes[777][held]
 		canHarvest = isPick && mask&(1<<bit) != 0
 	}
+	// 原版公式：秒 = 硬度 × (可采 ? 1.5 : 5) / 速度倍率 → 刻 = ×20
 	base := h * 30
 	if !canHarvest {
 		base = h * 100
 	}
-	damage := speed / h
-	if damage <= 0 {
-		damage = 1e-6
+	ticks := int32(math.Ceil(base / speed))
+	if ticks < 1 {
+		ticks = 1
 	}
-	ticks := int32(math.Ceil(base / damage))
 	if ticks < 1 {
 		ticks = 1
 	}
 	return ticks
+}
+
+// toolMatches 手持工具类别是否匹配方块（镐↔mineable/pickaxe，斧/锹/锄 ↔ blocktoolclass）。
+// 剑对蛛网等特例不在此处理；空手恒不匹配。
+func (g *Game) toolMatches(p *entity.Player, state uint32, heldName string) bool {
+	class, ok := heldToolClass(heldName)
+	if !ok {
+		return false
+	}
+	if class == 0 { // 镐
+		_, isPickBlock := g.mineable[777][state]
+		return isPickBlock
+	}
+	return g.toolClass[state] == class
+}
+
+// heldToolClass 物品名 → 工具类别（0镐 1斧 2锹 3锄；空手/其他 false）。
+func heldToolClass(name string) (uint8, bool) {
+	for _, c := range []struct {
+		suffix string
+		class  uint8
+	}{{"_pickaxe", 0}, {"_axe", 1}, {"_shovel", 2}, {"_hoe", 3}} {
+		if len(name) > len(c.suffix) && name[len(name)-len(c.suffix):] == c.suffix {
+			return c.class, true
+		}
+	}
+	return 0, false
 }
 
 // toolSpeed 工具材质 → 挖掘速度倍率（原版公开数值；镐/斧/锹/锄均适用）。
@@ -222,6 +289,13 @@ func toolSpeed(itemName string) float64 {
 		return 5
 	}
 	return 1
+}
+
+func minI32(a, b int32) int32 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // rejectDig 挖掘被拒（时长不足/不可破坏）：回显权威方块状态并 ack。
@@ -264,7 +338,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		Face: u.Face, Sequence: u.Sequence}
 	defer func() { g.Bus.emit(bus) }()
 
-	if g.tryIgnitePortal(p, u) {
+	if g.tryIgniteTnt(p, u) || g.tryIgniteFire(p, u) || g.tryIgnitePortal(p, u) {
 		return
 	}
 	held := p.Held()
@@ -278,6 +352,7 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		g.rejectPlace(p, u, tx, ty, tz)
 		return // 该物品不是方块（或该版本无映射表）
 	}
+	state = g.faceState(p, state) // 含 facing 属性的方块按玩家朝向放置
 	if g.bedByState[state] != nil { // 床：双格放置
 		if g.inDigRange(p, tx, ty, tz) {
 			g.tryPlaceBed(p, u, tx, ty, tz, state)
@@ -299,6 +374,9 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		return
 	}
 	g.applyBlock(p.Dim, tx, ty, tz, state, u.Sequence, p)
+	if state >= world.FireMin && state <= world.FireMax {
+		g.trackFire(p.Dim, tx, ty, tz)
+	}
 	bus.State, bus.ItemID = state, held.ID
 	g.scheduleRedstoneUpdate(p.Dim, tx, ty, tz)
 	g.scheduleObserverCheck(p.Dim, tx, ty, tz)

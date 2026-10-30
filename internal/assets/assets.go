@@ -359,6 +359,28 @@ func RecipeFile(proto int32) ([]byte, error) {
 	return files.ReadFile(fmt.Sprintf("data/recipes_%d.txt", proto))
 }
 
+// ToolClasses 返回方块状态 → 工具类别（1斧 2锹 3锄；镐走 MineableMask）。
+func ToolClasses(proto int32) map[uint32]uint8 {
+	b, err := files.ReadFile(fmt.Sprintf("data/blocktoolclass_%d.txt", proto))
+	if err != nil {
+		return nil
+	}
+	m := map[uint32]uint8{}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		state, e1 := strconv.ParseUint(fields[0], 10, 32)
+		cls, e2 := strconv.Atoi(fields[1])
+		if e1 != nil || e2 != nil || cls < 1 || cls > 3 {
+			continue
+		}
+		m[uint32(state)] = uint8(cls)
+	}
+	return m
+}
+
 // Sounds 返回协议版本的音效表（音效短名 → sound_event 注册表网络 ID）。
 func Sounds(proto int32) map[string]int32 {
 	return loadTextTable(proto, "sounds")

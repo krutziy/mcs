@@ -194,6 +194,10 @@ func (g *Game) trySleepBed(p *entity.Player, u packet.UseItemOn) bool {
 	if !isBed {
 		return false
 	}
+	if p.Dim != DimOverworld {
+		g.bedExplode(p, u.X, u.Y, u.Z)
+		return true
+	}
 	if g.isCreative(p) {
 		return true // 创造不睡
 	}

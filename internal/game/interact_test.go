@@ -625,6 +625,9 @@ func TestBrewingAndDrink(t *testing.T) {
 		t.Fatalf("药水名记账应迁移: %+v %v", p.Slots[36], p.PotionOf)
 	}
 	g.handleUseItem(&playerUseItemEvent{p: p, sequence: 9})
+	for i := int32(0); i < eatDurationTicks; i++ { // 药水 32 刻计时饮用
+		g.tickEating()
+	}
 	if p.Effects["strength"] <= 0 {
 		t.Fatal("饮用力量药水应生效")
 	}
