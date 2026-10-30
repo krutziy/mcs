@@ -179,10 +179,10 @@ func (g *Game) dropBrewingContents(pos [4]int32) {
 }
 
 type brewJSON struct {
-	Pos    [4]int32  `json:"pos"`
-	Slots  [][2]int32 `json:"slots"`
-	Potion [3]string `json:"potion"`
-	Brew   int32     `json:"brew"`
+	Pos    [4]int32     `json:"pos"`
+	Slots  []entity.Item `json:"slots"`
+	Potion [3]string    `json:"potion"`
+	Brew   int32        `json:"brew"`
 }
 
 func (g *Game) saveBrewings() {
@@ -190,7 +190,7 @@ func (g *Game) saveBrewings() {
 	for pos, bs := range g.brews {
 		c := brewJSON{Pos: pos, Potion: bs.potion, Brew: bs.brew}
 		for _, s := range bs.slots {
-			c.Slots = append(c.Slots, [2]int32{s.ID, s.Count})
+			c.Slots = append(c.Slots, s)
 		}
 		list = append(list, c)
 	}
@@ -203,15 +203,20 @@ func (g *Game) loadBrewings() {
 	if err != nil {
 		return
 	}
-	var list []brewJSON
-	if json.Unmarshal(b, &list) != nil {
+	var raw []struct {
+		Pos    [4]int32          `json:"pos"`
+		Slots  []json.RawMessage `json:"slots"`
+		Potion [3]string         `json:"potion"`
+		Brew   int32             `json:"brew"`
+	}
+	if json.Unmarshal(b, &raw) != nil {
 		return
 	}
-	for _, e := range list {
+	for _, e := range raw {
 		bs := &brewingState{potion: e.Potion, brew: e.Brew}
-		for i, s := range e.Slots {
+		for i, s := range itemsFromRaw(e.Slots) {
 			if i < 4 {
-				bs.slots[i] = entity.Item{ID: s[0], Count: s[1]}
+				bs.slots[i] = s
 			}
 		}
 		g.brews[e.Pos] = bs
@@ -241,6 +246,70 @@ var potionEffects = map[string]struct {
 	"night_vision":     {effect: "night_vision", ticks: 3600, amp: 0},
 	"leaping":          {effect: "jump_boost", ticks: 3600, amp: 0},
 	"slow_falling":     {effect: "slow_falling", ticks: 1800, amp: 0},
+	"poison":           {effect: "poison", ticks: 900, amp: 0},
+	"long_poison":      {effect: "poison", ticks: 1800, amp: 0},
+	"strong_poison":    {effect: "poison", ticks: 432, amp: 1},
+	"weakness":         {effect: "weakness", ticks: 1800, amp: 0},
+	"long_weakness":    {effect: "weakness", ticks: 4800, amp: 0},
+	"slowness":         {effect: "slowness", ticks: 1800, amp: 0},
+}
+
+// loadBrewingExtras 酿造补充（官方表外的腐化/感染链，公开配方）。
+func (g *Game) loadBrewingExtras() {
+	if g.brewing == nil {
+		g.brewing = map[[2]string]string{}
+	}
+	for k, v := range map[[2]string]string{
+		{"awkward", "spider_eye"}:             "poison",
+		{"water", "fermented_spider_eye"}:     "weakness",
+		{"swiftness", "fermented_spider_eye"}: "slowness",
+		{"strength", "fermented_spider_eye"}:  "weakness",
+		{"healing", "fermented_spider_eye"}:   "harming",
+		{"poison", "fermented_spider_eye"}:    "harming",
+	} {
+		g.brewing[k] = v
+	}
+}
+
+// applyPotionByName 按药水名对玩家应用效果（喷溅药水/饮用共用）。
+func (g *Game) applyPotionByName(p *entity.Player, name string) {
+	def, ok := potionEffects[name]
+	if !ok {
+		return
+	}
+	if def.heal > 0 {
+		p.Health += def.heal
+		if p.Health > 20 {
+			p.Health = 20
+		}
+		g.syncHealth(p)
+	} else if def.heal < 0 {
+		g.damage(p, -def.heal, damageGeneric)
+	}
+	if def.effect != "" {
+		p.Effects[def.effect] = def.ticks
+		p.EffectAmp[def.effect] = def.amp
+		g.syncEffects(p)
+	}
+}
+
+// applyPotionToMob 药水对生物：治疗/伤害类即时结算，毒类持续。
+func (g *Game) applyPotionToMob(m *mob, name string) {
+	def, ok := potionEffects[name]
+	if !ok {
+		return
+	}
+	if def.heal > 0 {
+		m.health += def.heal
+	} else if def.heal < 0 {
+		m.health += def.heal
+	}
+	if def.effect == "poison" {
+		m.poison = def.ticks // mob.poison 由 tickMobs 消化
+	}
+	if m.health <= 0 {
+		g.killMob(m, nil)
+	}
 }
 
 // drinkPotion use_item 手持药水：应用效果并消耗（玻璃瓶返还简化为无）。

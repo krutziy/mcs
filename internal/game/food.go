@@ -51,7 +51,7 @@ func (g *Game) handleUseItem(ev *playerUseItemEvent) {
 			packet.WriteBlockChangedAck(w, ev.sequence)
 		})
 	}
-	if g.handleBowUse(ev) || g.handleThrowUse(ev) {
+	if g.handleBowUse(ev) || g.handleThrowUse(ev) || g.throwEnderEye(p) || g.tryCastRod(p) {
 		return
 	}
 	if g.tryEquipArmor(ev) {

@@ -153,6 +153,10 @@ func (g *Game) tickEnvironmental() {
 			continue
 		}
 		g.berryBushPrickle(p)
+		// 中毒：每 25 刻 1 伤（止于半心）
+		if p.Effects["poison"] > 0 && g.tick%25 == 0 && p.Health > 1 {
+			g.damage(p, 1, damageGeneric)
+		}
 		eye := g.w(p).GetBlock(floorI(p.X), floorI(p.Y+1.62), floorI(p.Z))
 		body := g.w(p).GetBlock(floorI(p.X), floorI(p.Y), floorI(p.Z))
 		feet := g.w(p).GetBlock(floorI(p.X), floorI(p.Y+0.2), floorI(p.Z))

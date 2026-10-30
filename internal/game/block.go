@@ -338,7 +338,9 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		Face: u.Face, Sequence: u.Sequence}
 	defer func() { g.Bus.emit(bus) }()
 
-	if g.tryIgniteTnt(p, u) || g.tryIgniteFire(p, u) || g.tryIgnitePortal(p, u) {
+	if g.tryIgniteTnt(p, u) || g.tryIgniteFire(p, u) || g.tryIgnitePortal(p, u) ||
+		g.tryPlaceEyeInFrame(p, u) || g.tryRespawnDragon(p, u) ||
+		g.tryTuneNoteBlock(p, u) || g.tryUseJukebox(p, u) {
 		return
 	}
 	held := p.Held()

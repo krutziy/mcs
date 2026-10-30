@@ -154,9 +154,15 @@ func (g *Game) tickDragon() {
 			d.swoop = 0 // 俯冲结束回盘旋
 		} else {
 			speed := 0.9
-			d.px += dx / dd * speed
-			d.pz += dz / dd * speed
-			d.y += dy / dd * speed
+			// 前方地形阻挡：抬升绕过
+			nx, nz := d.px+dx/dd*speed*4, d.pz+dz/dd*speed*4
+			if g.blockAtDim(DimEnd, floorI(nx), floorI(d.y-2), floorI(nz)) {
+				d.y += 0.8
+			} else {
+				d.px += dx / dd * speed
+				d.pz += dz / dd * speed
+				d.y += dy / dd * speed
+			}
 		}
 	} else {
 		d.angle += 0.02

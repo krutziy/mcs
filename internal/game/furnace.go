@@ -235,45 +235,65 @@ func (g *Game) dropFurnaceContents(pos [4]int32) {
 }
 
 type furnaceJSON struct {
-	Pos     [4]int32 `json:"pos"`
-	Input   [2]int32 `json:"in"`
-	Fuel    [2]int32 `json:"fuel"`
-	Output  [2]int32 `json:"out"`
-	Burn    int32    `json:"burn"`
-	BurnMax int32    `json:"burnmax"`
-	Cook    int32    `json:"cook"`
+	Pos     [4]int32      `json:"pos"`
+	Input   entity.Item   `json:"in"`
+	Fuel    entity.Item   `json:"fuel"`
+	Output  entity.Item   `json:"out"`
+	Burn    int32         `json:"burn"`
+	BurnMax int32         `json:"burnmax"`
+	Cook    int32         `json:"cook"`
 }
 
-// saveFurnaces 持久化熔炉状态。
+// saveFurnaces 持久化熔炉状态（含耐久/附魔）。
 func (g *Game) saveFurnaces() {
 	var list []furnaceJSON
 	for pos, fs := range g.furnaces {
 		list = append(list, furnaceJSON{pos,
-			[2]int32{fs.input.ID, fs.input.Count}, [2]int32{fs.fuel.ID, fs.fuel.Count},
-			[2]int32{fs.output.ID, fs.output.Count}, fs.burn, fs.burnMax, fs.cook})
+			fs.input, fs.fuel, fs.output, fs.burn, fs.burnMax, fs.cook})
 	}
 	b, _ := json.Marshal(list)
 	_ = os.WriteFile(filepath.Join(g.Cfg.SaveDir, "furnaces.json"), b, 0o644)
 }
 
-// loadFurnaces 读回熔炉状态。
+// loadFurnaces 读回熔炉状态（旧档 [id,count] 数组兼容）。
 func (g *Game) loadFurnaces() {
 	b, err := os.ReadFile(filepath.Join(g.Cfg.SaveDir, "furnaces.json"))
 	if err != nil {
 		return
 	}
-	var list []furnaceJSON
-	if json.Unmarshal(b, &list) != nil {
+	var raw []struct {
+		Pos     [4]int32      `json:"pos"`
+		Input   json.RawMessage `json:"in"`
+		Fuel    json.RawMessage `json:"fuel"`
+		Output  json.RawMessage `json:"out"`
+		Burn    int32          `json:"burn"`
+		BurnMax int32          `json:"burnmax"`
+		Cook    int32          `json:"cook"`
+	}
+	if json.Unmarshal(b, &raw) != nil {
 		return
 	}
-	for _, e := range list {
+	for _, e := range raw {
 		g.furnaces[e.Pos] = &furnaceState{
-			input:   entity.Item{ID: e.Input[0], Count: e.Input[1]},
-			fuel:    entity.Item{ID: e.Fuel[0], Count: e.Fuel[1]},
-			output:  entity.Item{ID: e.Output[0], Count: e.Output[1]},
+			input:   itemFromRaw(e.Input),
+			fuel:    itemFromRaw(e.Fuel),
+			output:  itemFromRaw(e.Output),
 			burn:    e.Burn, burnMax: e.BurnMax, cook: e.Cook,
 		}
 	}
+}
+
+// itemFromRaw 单物品解析（对象优先，[id,count] 数组兼容）。
+func itemFromRaw(r json.RawMessage) entity.Item {
+	var it entity.Item
+	if json.Unmarshal(r, &it) == nil && it.ID != 0 {
+		return it
+	}
+	var pair [2]int32
+	if json.Unmarshal(r, &pair) == nil {
+		return entity.Item{ID: pair[0], Count: pair[1]}
+	}
+	return entity.Item{}
 }
 
 var _ = protocol.Position{}

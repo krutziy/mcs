@@ -16,6 +16,7 @@ func newInteractGame(t *testing.T) (*Game, *entity.Player, *fakeSender) {
 	g, p, fs := newTestGame(packet.ModeSurvival)
 	g.loadInteractTables()
 	g.smelting = assets.Smelting(777)
+	g.loadBrewingExtras()
 	if len(g.bedByState) == 0 || len(g.doorByState) == 0 {
 		t.Fatal("床/门状态资产缺失")
 	}

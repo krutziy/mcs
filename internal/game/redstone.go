@@ -122,7 +122,7 @@ func (g *Game) recomputeRedstone(dim int32) {
 	// 1) 扫描已加载区块全部方块找红石元件（存档世界通常几十区块，可承受；
 	//    用 Manager 提供的迭代）
 	type rsPos struct{ x, y, z int32 }
-	var wires, sources, lamps, torches, repeaters []rsPos
+	var wires, sources, lamps, torches, repeaters, notes []rsPos
 	w.EachChunk(func(cx, cz int32, ch *world.Chunk) {
 		for i := int32(0); i < world.NumSections; i++ {
 			sec := ch.Section(i)
@@ -147,6 +147,8 @@ func (g *Game) recomputeRedstone(dim int32) {
 					sources = append(sources, rsPos{wx, wy, wz})
 				case s == lampOn || s == lampOff:
 					lamps = append(lamps, rsPos{wx, wy, wz})
+				case s >= 680 && s <= 729: // note_block harp 族
+					notes = append(notes, rsPos{wx, wy, wz})
 				case s == repeaterOn || s == repeaterOff:
 					repeaters = append(repeaters, rsPos{wx, wy, wz})
 				}
@@ -265,7 +267,18 @@ func (g *Game) recomputeRedstone(dim int32) {
 			g.setRS(dim, l.x, l.y, l.z, ns)
 		}
 	}
-	// 5) 火把：附着方块（下方）被充能（下方是 power>0 的线或点亮中继器邻接）→ 熄灭
+	// 5) 音符盒：通电边沿触发发声
+	for _, n := range notes {
+		key := [4]int32{dim, n.x, n.y, n.z}
+		powered := g.posPowered(dim, n.x, n.y, n.z)
+		if powered && !g.notePlayed[key] {
+			g.notePlayed[key] = true
+			g.playNote(dim, n.x, n.y, n.z, noteOfState(w.GetBlock(n.x, n.y, n.z)))
+		} else if !powered {
+			delete(g.notePlayed, key)
+		}
+	}
+	// 6) 火把：附着方块（下方）被充能（下方是 power>0 的线或点亮中继器邻接）→ 熄灭
 	for _, t := range torches {
 		below := w.GetBlock(t.x, t.y-1, t.z)
 		fed := powerAt[rsPos{t.x, t.y - 1, t.z}] > 0

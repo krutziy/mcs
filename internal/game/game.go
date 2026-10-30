@@ -112,6 +112,9 @@ type Game struct {
 	dragon        *dragonState             // 末影龙战（nil = 未激活）
 	crystals      map[int32]*endCrystal    // 末影水晶
 	dragonDefeated bool                    // 龙已被击败（endstate.json）
+	jukeboxes    map[[4]int32]int32       // 唱片机（位置 → 唱片物品 777 ID）
+	notePlayed   map[[4]int32]bool        // 音符盒通电边沿标记
+	fishing      map[int32]*fishingBobber // 钓鱼浮标（玩家 EID）
 
 	closed atomic.Bool
 }
@@ -160,6 +163,9 @@ func New(cfg Config, suite *version.Suite) *Game {
 		pendingBlocks:  map[[4]int32]uint32{},
 		drags:          map[int32]*dragState{},
 		crystals:       map[int32]*endCrystal{},
+		jukeboxes:      map[[4]int32]int32{},
+		notePlayed:     map[[4]int32]bool{},
+		fishing:        map[int32]*fishingBobber{},
 	}
 	g.blockDrops = assets.BlockDropsEx(777)
 	g.mobDrops = assets.MobDropsEx(777)
@@ -218,6 +224,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 	if sm := assets.Smelting(777); len(sm) > 0 {
 		g.smelting = sm
 	}
+	g.loadBrewingExtras()
 	// 775 无官方报告：借用相邻 776 的表
 	if g.entityTypes[775] == nil {
 		g.entityTypes[775] = g.entityTypes[776]
@@ -361,6 +368,7 @@ func (g *Game) tickNow() {
 	g.tickArrows()
 	g.tickThrown()
 	g.tickBowCharging()
+	g.tickFishing()
 	g.tickCreepers()
 	g.tickTnts()
 	g.tickFires()

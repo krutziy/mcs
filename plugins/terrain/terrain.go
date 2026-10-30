@@ -91,6 +91,7 @@ func (g *NoiseGenerator) Generate(ch *world.Chunk) {
 	g.plantOres(ch)
 	g.plantTrees(ch)
 	g.decorate(ch)
+	g.buildStrongholdRoom(ch)
 }
 
 // HeightAt 返回 (x,z) 的地表相对高度（0..WorldHeight-1，相对 min_y）。

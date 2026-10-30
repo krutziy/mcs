@@ -42,6 +42,7 @@ type mob struct {
 	uuid protocol.UUID
 	kind mobKind
 	dim  int32
+	poison      int32 // 中毒剩余刻
 	x, y, z     float64
 	vx, vy, vz  float64 // 击退/重力
 	health      float32
@@ -109,6 +110,20 @@ func (g *Game) removeMob(m *mob) {
 func (g *Game) tickMobs() {
 	for _, m := range g.mobs {
 		m.age++
+		// 中毒：每 25 刻 1 伤（不死，止于 1 血）
+		if m.poison > 0 {
+			m.poison--
+			if m.poison%25 == 0 && m.health > 1 {
+				m.health--
+				if n := mobHurtSoundName(m.kind.name); n != "" {
+					g.mobSound(m, n)
+				}
+			}
+			if m.health <= 0 {
+				g.killMob(m, nil)
+				continue
+			}
+		}
 		// AI
 		if m.kind.hostile {
 			if m.kind.name == "skeleton" || m.kind.name == "creeper" {
@@ -224,6 +239,9 @@ func (g *Game) handleAttack(ev *playerAttackEvent) {
 		return
 	}
 	dmg := g.attackDamage(p) + g.enchantAttackBonus(p)
+	if p.Effects["weakness"] > 0 {
+		dmg *= 0.5 // 虚弱：近战减半
+	}
 	crit := !p.OnGround && p.FallStart != 0 && p.FallStart >= p.Y &&
 		!g.playerInWater(p)
 	if crit {

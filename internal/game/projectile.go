@@ -6,6 +6,7 @@ package game
 
 import (
 	"math"
+	"math/rand"
 
 	"mcserver/internal/entity"
 	"mcserver/internal/packet"
@@ -103,9 +104,10 @@ func (g *Game) spawnPlayerArrow(p *entity.Player, x, y, z, vx, vy, vz float64, d
 type thrownProjectile struct {
 	eid        int32
 	uuid       protocol.UUID
-	kind       string // snowball | egg | ender_pearl
+	kind       string // snowball | egg | ender_pearl | ender_eye | splash_potion
 	owner      int32
 	dim        int32
+	potion     string // 喷溅药水的药水名
 	x, y, z    float64
 	vx, vy, vz float64
 	age        int
@@ -116,7 +118,7 @@ func (g *Game) handleThrowUse(ev *playerUseItemEvent) bool {
 	p := ev.p
 	name := g.itemNameOf(p, p.Held().ID)
 	switch name {
-	case "snowball", "egg", "ender_pearl":
+	case "snowball", "egg", "ender_pearl", "splash_potion":
 	default:
 		return false
 	}
@@ -141,9 +143,14 @@ func (g *Game) handleThrowUse(ev *playerUseItemEvent) bool {
 	dy := -math.Sin(pitch)
 	dz := math.Cos(yaw) * math.Cos(pitch)
 	speed := 1.5
+	// 喷溅药水携带药水名（拾取记账）
+	potionName := ""
+	if name == "splash_potion" {
+		potionName = p.PotionOf[[2]int32{36 + p.HeldSlot, 0}]
+	}
 	eid := g.nextEID.Add(1)
 	tp := &thrownProjectile{eid: eid, uuid: entityUUID(eid), kind: name,
-		owner: p.EntityID, dim: p.Dim,
+		owner: p.EntityID, dim: p.Dim, potion: potionName,
 		x: p.X + dx*0.5, y: p.Y + 1.5, z: p.Z + dz*0.5,
 		vx: dx * speed, vy: dy*speed + 0.1, vz: dz * speed}
 	g.thrown[eid] = tp
@@ -160,12 +167,28 @@ func (g *Game) handleThrowUse(ev *playerUseItemEvent) bool {
 	return true
 }
 
-// tickThrown 投掷物飞行与命中（重力、方块/生物命中、珍珠传送）。
+// tickThrown 投掷物飞行与命中（重力、方块/生物命中、珍珠传送、
+// 末影之眼指向飞行、喷溅药水范围生效）。
 func (g *Game) tickThrown() {
 	for eid, tp := range g.thrown {
 		tp.age++
 		if tp.age > 600 {
 			g.removeThrown(eid, tp)
+			continue
+		}
+		// 末影之眼：无重力直线飞 60 刻，80% 消散 / 20% 掉落
+		if tp.kind == "ender_eye" {
+			if tp.age >= 60 {
+				if rand.Intn(5) == 0 {
+					g.spawnItem(tp.dim, tp.x, tp.y, tp.z,
+						entity.Item{ID: g.itemID777("ender_eye"), Count: 1})
+				}
+				g.removeThrown(eid, tp)
+				continue
+			}
+			tp.x += tp.vx
+			tp.y += tp.vy
+			tp.z += tp.vz
 			continue
 		}
 		tp.vy -= 0.03
@@ -209,13 +232,39 @@ func (g *Game) tickThrown() {
 			}
 		}
 		if hit {
-			if tp.kind == "ender_pearl" {
+			switch tp.kind {
+			case "ender_pearl":
 				g.pearlLand(tp)
+			case "splash_potion":
+				g.splashPotionEffect(tp)
 			}
 			g.removeThrown(eid, tp)
 			continue
 		}
 		tp.x, tp.y, tp.z = nx, ny, nz
+	}
+}
+
+// splashPotionEffect 喷溅药水破裂：半径 4 内玩家/生物获得药水效果。
+func (g *Game) splashPotionEffect(tp *thrownProjectile) {
+	g.blockSound(tp.dim, tp.x, tp.y, tp.z, "entity.splash_potion.break")
+	for _, p := range g.players {
+		if p.Dim != tp.dim || p.Dead {
+			continue
+		}
+		if dist2(p.X, p.Y, p.Z, tp.x, tp.y, tp.z) > 16 {
+			continue
+		}
+		g.applyPotionByName(p, tp.potion)
+	}
+	for _, m := range g.mobs {
+		if m.dim != tp.dim {
+			continue
+		}
+		if dist2(m.x, m.y, m.z, tp.x, tp.y, tp.z) > 16 {
+			continue
+		}
+		g.applyPotionToMob(m, tp.potion)
 	}
 }
 

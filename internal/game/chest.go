@@ -193,10 +193,10 @@ func (g *Game) dropChestContents(pos [4]int32) {
 }
 
 type chestJSON struct {
-	Pos   [4]int32    `json:"pos"`
-	Slots [][2]int32 `json:"slots"`
-	Large bool       `json:"large,omitempty"`
-	Pair  [4]int32   `json:"pair,omitempty"`
+	Pos   [4]int32       `json:"pos"`
+	Slots []entity.Item  `json:"slots"` // 含耐久/附魔（旧档 [id,count] 数组兼容）
+	Large bool           `json:"large,omitempty"`
+	Pair  [4]int32       `json:"pair,omitempty"`
 }
 
 func (g *Game) saveChests() {
@@ -213,8 +213,7 @@ func (g *Game) saveChests() {
 			n = 54
 		}
 		for i := 0; i < n; i++ {
-			s := cs.slots[i]
-			c.Slots = append(c.Slots, [2]int32{s.ID, s.Count})
+			c.Slots = append(c.Slots, cs.slots[i])
 		}
 		list = append(list, c)
 	}
@@ -227,15 +226,21 @@ func (g *Game) loadChests() {
 	if err != nil {
 		return
 	}
-	var list []chestJSON
-	if json.Unmarshal(b, &list) != nil {
+	var raw []struct {
+		Pos   [4]int32          `json:"pos"`
+		Slots []json.RawMessage `json:"slots"`
+		Large bool              `json:"large"`
+		Pair  [4]int32          `json:"pair"`
+	}
+	if json.Unmarshal(b, &raw) != nil {
 		return
 	}
-	for _, e := range list {
+	for _, e := range raw {
 		cs := &chestState{large: e.Large, pair: e.Pair}
-		for i, s := range e.Slots {
+		items := itemsFromRaw(e.Slots)
+		for i, s := range items {
 			if i < 54 {
-				cs.slots[i] = entity.Item{ID: s[0], Count: s[1]}
+				cs.slots[i] = s
 			}
 		}
 		g.chests[e.Pos] = cs
@@ -255,4 +260,28 @@ func (g *Game) loadChests() {
 			}
 		}
 	}
+}
+
+// itemsFromRaw 物品槽数组解析：新格式（对象 ID/Count/Damage/Ench）优先，
+// 旧格式（[id,count] 二元数组）兼容。
+func itemsFromRaw(raws []json.RawMessage) []entity.Item {
+	out := make([]entity.Item, 0, len(raws))
+	for _, r := range raws {
+		var it entity.Item
+		if json.Unmarshal(r, &it) == nil && it.ID != 0 {
+			out = append(out, it)
+			continue
+		}
+		var pair [2]int32
+		if json.Unmarshal(r, &pair) == nil {
+			if pair[0] != 0 {
+				out = append(out, entity.Item{ID: pair[0], Count: pair[1]})
+			} else {
+				out = append(out, entity.Item{})
+			}
+			continue
+		}
+		out = append(out, entity.Item{})
+	}
+	return out
 }
