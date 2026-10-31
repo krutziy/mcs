@@ -336,14 +336,23 @@ func TestDragonRespawn(t *testing.T) {
 		t.Fatal("应找到出口基座")
 	}
 	crystal := g.itemFor(p, g.itemID777("end_crystal"))
-	p.Slots[36] = entity.Item{ID: crystal, Count: 2}
+	p.Slots[36] = entity.Item{ID: crystal, Count: 5}
+	// 4 水晶重生（原版行为）
+	for i := 0; i < 3; i++ {
+		if !g.tryRespawnDragon(p, bedrockPos) {
+			t.Fatal("前 3 次应放置装饰水晶")
+		}
+		if g.dragon != nil {
+			t.Fatal("第 4 次前不应重生")
+		}
+	}
 	if !g.tryRespawnDragon(p, bedrockPos) {
-		t.Fatal("应触发龙重生")
+		t.Fatal("第 4 次应触发龙重生")
 	}
 	if g.dragon == nil || len(g.crystals) == 0 {
 		t.Fatal("龙与水晶应重生")
 	}
 	if p.Slots[36].Count != 1 {
-		t.Fatal("应消耗 1 水晶")
+		t.Fatal("应消耗 4 水晶")
 	}
 }

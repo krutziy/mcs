@@ -88,6 +88,9 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 			packet.WriteLevelEvent(w, levelEventBlockBreak, a.X, a.Y, a.Z, int32(data), false)
 		})
 	}
+	if isWartState(old) {
+		g.harvestWart(p, p.Dim, a.X, a.Y, a.Z, old)
+	}
 	dpos := [4]int32{p.Dim, a.X, a.Y, a.Z}
 	g.dropFurnaceContents(dpos)
 	g.dropChestContents(dpos)
@@ -320,7 +323,8 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 		return
 	}
 	u := ev.use
-	if g.tryHarvestBerryBush(p, u) || g.tryPlantBerry(p, u) ||
+	if g.tryHarvestBerryBush(p, u) || g.tryPlantBerry(p, u) || g.tryPlantWart(p, u) ||
+		g.tryPlaceMinecart(p, u) ||
 		g.tryOpenCrafting(p, u) || g.tryOpenFurnace(p, u) || g.tryOpenChest(p, u) ||
 		g.tryTill(p, u) || g.tryPlantSeed(p, u) || g.tryBonemeal(p, u) ||
 		g.tryOpenBrewing(p, u) ||

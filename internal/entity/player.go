@@ -77,6 +77,9 @@ type Player struct {
 	EatTicks    int32   // 进食进度（32 刻 = 1.6 秒；<0 未进食）
 	EatItem     int32   // 进食中的物品快照（ID 变化则中断）
 
+	// 载具（正在乘坐的实体 EID；0 = 步行）
+	Vehicle int32
+
 	// 弓蓄力（≥0 计时中；-1 未拉）与末影珍珠冷却
 	BowTicks int32
 	PearlCd  int32

@@ -66,10 +66,40 @@ func (g *Game) tryTuneNoteBlock(p *entity.Player, u packet.UseItemOn) bool {
 	return true
 }
 
-// playNote 播放音符（音高 = 2^(note/12)）。
+// noteInstrument 按下方方块选乐器（原版映射的常用子集，缺省竖琴）。
+func noteInstrument(below string) string {
+	switch below {
+	case "stone", "cobblestone", "stone_bricks", "deepslate", "granite", "diorite", "andesite",
+		"obsidian", "bedrock", "coal_ore", "iron_ore", "diamond_ore":
+		return "basedrum"
+	case "oak_planks", "spruce_planks", "birch_planks", "oak_log", "spruce_log", "bookshelf",
+		"crafting_table", "chest", "note_block":
+		return "bass"
+	case "sand", "gravel", "glass", "soul_sand":
+		return "snare"
+	case "grass_block", "dirt":
+		return "hat"
+	case "gold_block", "glowstone":
+		return "bell"
+	case "clay", "packed_ice":
+		return "flute"
+	case "white_wool", "red_wool", "blue_wool":
+		return "guitar"
+	case "nether_bricks", "netherrack":
+		return "basedrum"
+	}
+	return "harp"
+}
+
+// playNote 播放音符（音高 = 2^(note/12)，音色按下方方块）。
 func (g *Game) playNote(dim int32, x, y, z int32, note int32) {
 	pitch := float32(math.Pow(2, float64(note-12)/12.0)) // note 12 = 中央 C 上方基准
-	g.playSoundAt(dim, float64(x), float64(y), float64(z), SoundBlock, "block.note_block.harp", 1, pitch)
+	below := ""
+	if g.blockNames[g.wd(dim).GetBlock(x, y-1, z)] != "" {
+		below = g.blockNames[g.wd(dim).GetBlock(x, y-1, z)]
+	}
+	g.playSoundAt(dim, float64(x), float64(y), float64(z), SoundBlock,
+		"block.note_block."+noteInstrument(below), 1, pitch)
 }
 
 // ---- 唱片机 ----
@@ -198,12 +228,20 @@ func (g *Game) catchFish(p *entity.Player) {
 	}
 	name := "raw_cod"
 	switch {
-	case r%10 < 6:
+	case r%100 < 50:
 		name = "raw_cod"
-	case r%10 < 9:
+	case r%100 < 70:
 		name = "raw_salmon"
-	default:
+	case r%100 < 80:
 		name = "pufferfish"
+	case r%100 < 85:
+		name = "tropical_fish"
+	case r%100 < 95: // 垃圾 10%
+		junk := []string{"stick", "string", "bowl", "leather", "rotten_flesh"}
+		name = junk[r%int64(len(junk))]
+	default: // 宝物 5%
+		treasure := []string{"saddle", "name_tag", "lily_pad", "enchanted_book"}
+		name = treasure[r%int64(len(treasure))]
 	}
 	g.giveItem(p, entity.Item{ID: g.itemFor(p, g.itemID777(name)), Count: 1})
 	g.giveXP(p, 1+int32(r%6))

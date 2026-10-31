@@ -57,6 +57,7 @@ func (g NetherGenerator) Generate(ch *world.Chunk) {
 	}
 	g.plantNetherOres(ch)
 	g.plantGlowstone(ch)
+	g.buildNetherFortress(ch)
 }
 
 // isCave 3D 值噪声洞窟判定（阈值控制洞窟密度）。
@@ -277,6 +278,7 @@ func (g EndGenerator) Generate(ch *world.Chunk) {
 			}
 		}
 	}
+	g.buildEndCities(ch)
 	// 黑曜石抵达平台（出生点）
 	if ch.CX == 6 && ch.CZ == 0 {
 		for dx := int32(-2); dx <= 2; dx++ {

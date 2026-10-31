@@ -133,6 +133,10 @@ type playerCloseAnvilEvent struct {
 	p *entity.Player
 }
 
+type playerCloseVillagerEvent struct {
+	p *entity.Player
+}
+
 type playerEnchantEvent struct {
 	p    *entity.Player
 	tier int32
@@ -147,6 +151,17 @@ type playerInteractEvent struct {
 	p        *entity.Player
 	target   int32
 	sneaking bool
+}
+
+type playerVehicleMoveEvent struct {
+	p          *entity.Player
+	x, y, z    float64
+	yaw, pitch float32
+}
+
+type playerInputEvent struct {
+	p     *entity.Player
+	inputs byte
 }
 
 // PlayLoop 阻塞处理 play 状态的入站包，直到连接断开。在独立 goroutine 中运行。
@@ -235,6 +250,8 @@ func (s *Session) PlayLoop() {
 				s.game.Submit(&playerCloseEnchEvent{p: p})
 			case 6:
 				s.game.Submit(&playerCloseAnvilEvent{p: p})
+			case 7:
+				s.game.Submit(&playerCloseVillagerEvent{p: p})
 			}
 		case "minecraft:attack":
 			s.game.Submit(&playerAttackEvent{p: p, target: pr.VarInt()})
@@ -244,11 +261,19 @@ func (s *Session) PlayLoop() {
 			target := pr.VarInt()
 			typ := pr.VarInt()
 			sneaking := pr.Bool()
-			if typ == 0 { // interact：喂食判定
+			if typ == 0 { // interact：喂食/鞍/交易/乘坐判定
 				s.game.Submit(&playerInteractEvent{p: p, target: target, sneaking: sneaking})
 			}
-		case "minecraft:client_tick_end", "minecraft:player_loaded", "minecraft:punch",
-			"minecraft:move_vehicle", "minecraft:player_input":
+		case "minecraft:move_vehicle":
+			x, y, z := pr.Double(), pr.Double(), pr.Double()
+			yaw, pitch := pr.Float(), pr.Float()
+			onGround := pr.Bool()
+			_ = onGround
+			s.game.Submit(&playerVehicleMoveEvent{p: p, x: x, y: y, z: z, yaw: yaw, pitch: pitch})
+		case "minecraft:player_input":
+			inputs := pr.Uint8()
+			s.game.Submit(&playerInputEvent{p: p, inputs: inputs})
+		case "minecraft:client_tick_end", "minecraft:player_loaded", "minecraft:punch":
 			// 活体心跳/输入流：无需处理
 		default:
 			log.Printf("[session %s] 未处理包 %s (0x%02x, %d字节)", s.name, name, id, len(body))

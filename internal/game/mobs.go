@@ -32,6 +32,10 @@ var mobKinds = map[string]mobKind{
 	"zombie": {name: "zombie", health: 20, speed: 0.07, hostile: true, damage: 3},
 	"skeleton": {name: "skeleton", health: 20, speed: 0.06, hostile: true, damage: 0},
 	"creeper": {name: "creeper", health: 20, speed: 0.07, hostile: true, damage: 0},
+	"blaze":      {name: "blaze", health: 20, speed: 0.05, hostile: true, damage: 4},
+	"silverfish": {name: "silverfish", health: 8, speed: 0.09, hostile: true, damage: 1},
+	"shulker":    {name: "shulker", health: 30, speed: 0, hostile: true, damage: 0},
+	"villager":   {name: "villager", health: 20, speed: 0.05},
 }
 
 var passiveKinds = []string{"pig", "sheep", "cow", "chicken", "rabbit"}
@@ -42,6 +46,7 @@ type mob struct {
 	uuid protocol.UUID
 	kind mobKind
 	dim  int32
+	color       int32 // 羊色（DyeColor 序）
 	poison      int32 // 中毒剩余刻
 	x, y, z     float64
 	vx, vy, vz  float64 // 击退/重力
@@ -125,7 +130,10 @@ func (g *Game) tickMobs() {
 			}
 		}
 		// AI
-		if m.kind.hostile {
+		if m.kind.name == "blaze" || m.kind.name == "shulker" {
+			g.tickExtendedAI(m)
+			m.vx, m.vz = 0, 0 // 悬浮/固定
+		} else if m.kind.hostile {
 			if m.kind.name == "skeleton" || m.kind.name == "creeper" {
 				g.tickHostileAI(m)
 				if m.kind.name == "creeper" && g.creepers[m.eid] == nil {
@@ -335,9 +343,11 @@ func (g *Game) killMob(m *mob, by *entity.Player) {
 	}
 	delete(g.mobs, eid)
 	delete(g.sheared, eid)
-	// 羊未剪毛时额外掉 1 羊毛（原版行为）
+	delete(g.saddled, eid)
+	delete(g.mobPaths, eid)
+	// 羊未剪毛时额外掉 1 同色羊毛（原版行为）
 	if m.kind.name == "sheep" && !wasSheared {
-		g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: g.itemID777("white_wool"), Count: 1})
+		g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: g.itemID777(woolOfColor(m.color)), Count: 1})
 	}
 	if d, ok := g.mobDrops[m.kind.name]; ok {
 		n := d.Min
@@ -350,6 +360,19 @@ func (g *Game) killMob(m *mob, by *entity.Player) {
 	}
 	if xp := mobXP[m.kind.name]; xp > 0 {
 		g.spawnXPOrb(m.dim, m.x, m.y+0.5, m.z, xp)
+	}
+	// 扩展掉落：烈焰棒 0-1、潜贝壳 0-1（50%）
+	switch m.kind.name {
+	case "blaze":
+		if rand.Intn(2) == 0 {
+			g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: g.itemID777("blaze_rod"), Count: 1})
+		}
+		g.spawnXPOrb(m.dim, m.x, m.y+0.5, m.z, 10)
+	case "shulker":
+		if rand.Intn(2) == 0 {
+			g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: g.itemID777("shulker_shell"), Count: 1})
+		}
+		g.spawnXPOrb(m.dim, m.x, m.y+0.5, m.z, 5)
 	}
 	g.Bus.emit(MobKilled{Player: by, Kind: m.kind.name})
 }
@@ -396,7 +419,14 @@ func (g *Game) tickMobSpawning() {
 				kind := passiveKinds[rand.Intn(len(passiveKinds))]
 				n := 1 + rand.Intn(3)
 				for i := 0; i < n; i++ {
-					g.spawnMob(kind, x+rand.Float64()*2-1, y, z+rand.Float64()*2-1)
+						if kind == "sheep" {
+							g.spawnColoredSheep(DimOverworld, x+rand.Float64()*2-1, y, z+rand.Float64()*2-1, -1)
+						} else {
+						g.spawnMob(kind, x+rand.Float64()*2-1, y, z+rand.Float64()*2-1)
+						}
+					}
+					if rand.Intn(10) == 0 { // 村民偶发与被动群同批
+						g.spawnMobIn(DimOverworld, "villager", x, y, z)
 				}
 			}
 		}

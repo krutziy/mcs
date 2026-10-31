@@ -66,6 +66,7 @@ func (g *Game) switchDimension(p *entity.Player, to int32, x, y, z float64) {
 	}
 	if to == DimEnd {
 		g.ensureDragonFight()
+		g.ensureEndCityMobs()
 	}
 	old := p.Dim
 	sess := g.sessionOf(p)

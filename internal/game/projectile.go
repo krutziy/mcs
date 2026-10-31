@@ -118,7 +118,7 @@ func (g *Game) handleThrowUse(ev *playerUseItemEvent) bool {
 	p := ev.p
 	name := g.itemNameOf(p, p.Held().ID)
 	switch name {
-	case "snowball", "egg", "ender_pearl", "splash_potion":
+	case "snowball", "egg", "ender_pearl", "splash_potion", "lingering_potion":
 	default:
 		return false
 	}
@@ -143,9 +143,9 @@ func (g *Game) handleThrowUse(ev *playerUseItemEvent) bool {
 	dy := -math.Sin(pitch)
 	dz := math.Cos(yaw) * math.Cos(pitch)
 	speed := 1.5
-	// 喷溅药水携带药水名（拾取记账）
+	// 喷溅/滞留药水携带药水名（拾取记账）
 	potionName := ""
-	if name == "splash_potion" {
+	if name == "splash_potion" || name == "lingering_potion" {
 		potionName = p.PotionOf[[2]int32{36 + p.HeldSlot, 0}]
 	}
 	eid := g.nextEID.Add(1)
@@ -237,11 +237,83 @@ func (g *Game) tickThrown() {
 				g.pearlLand(tp)
 			case "splash_potion":
 				g.splashPotionEffect(tp)
+			case "lingering_potion":
+				g.spawnLingeringCloud(tp)
 			}
 			g.removeThrown(eid, tp)
 			continue
 		}
 		tp.x, tp.y, tp.z = nx, ny, nz
+	}
+}
+
+// spawnLingeringCloud 滞留药水落地：生成 30 秒云雾（半径 3，每秒生效）。
+func (g *Game) spawnLingeringCloud(tp *thrownProjectile) {
+	eid := g.nextEID.Add(1)
+	c := &effectCloud{eid: eid, uuid: entityUUID(eid), dim: tp.dim,
+		potion: tp.potion, life: 600,
+		x: tp.x, y: tp.y, z: tp.z}
+	g.clouds[eid] = c
+	for _, v := range g.chunkViewers(tp.dim, int32(tp.x)>>4, int32(tp.z)>>4) {
+		typ := g.entityTypeID(v, "area_effect_cloud")
+		eid2, x, y, z := eid, c.x, c.y, c.z
+		v.Send.SendPlay("minecraft:add_entity", func(w *protocol.Writer) {
+			packet.SpawnEntity{EntityID: eid2, UUID: c.uuid, Type: typ,
+				X: x, Y: y, Z: z}.Write(w)
+		})
+	}
+	g.blockSound(tp.dim, tp.x, tp.y, tp.z, "entity.lingering_potion.throw")
+}
+
+// effectCloud 一片滞留药水云雾。
+type effectCloud struct {
+	eid    int32
+	uuid   protocol.UUID
+	dim    int32
+	potion string
+	life   int32
+	x, y, z float64
+}
+
+// tickClouds 云雾推进：每 20 刻对范围内玩家/生物生效，到期消散。
+func (g *Game) tickClouds() {
+	for eid, c := range g.clouds {
+		c.life--
+		if c.life <= 0 {
+			g.removeCloud(eid, c)
+			continue
+		}
+		if c.life%20 != 0 {
+			continue
+		}
+		for _, p := range g.players {
+			if p.Dim != c.dim || p.Dead {
+				continue
+			}
+			if dist2(p.X, p.Y, p.Z, c.x, c.y, c.z) < 9 {
+				g.applyPotionByName(p, c.potion)
+			}
+		}
+		for _, m := range g.mobs {
+			if m.dim != c.dim {
+				continue
+			}
+			if dist2(m.x, m.y, m.z, c.x, c.y, c.z) < 9 {
+				g.applyPotionToMob(m, c.potion)
+			}
+		}
+	}
+}
+
+func (g *Game) removeCloud(eid int32, c *effectCloud) {
+	delete(g.clouds, eid)
+	for _, p := range g.players {
+		if p.Dim != c.dim {
+			continue
+		}
+		p.Send.SendPlay("minecraft:remove_entities", func(w *protocol.Writer) {
+			packet.WriteRemoveEntities(w, []int32{eid})
+		})
 	}
 }
 

@@ -43,6 +43,7 @@ type arrow struct {
 	age        int
 	dmg        float32
 	crit       bool
+	fire       bool // 烈焰火球：命中点燃
 }
 
 // tickHostileAI 敌对生物扩展行为：骷髅射箭、苦力怕引信。
@@ -134,6 +135,10 @@ func (g *Game) tickArrows() {
 				}
 				if math.Abs(p.X-sx) < 0.7 && math.Abs(p.Z-sz) < 0.7 && sy > p.Y && sy < p.Y+2.0 {
 					g.damage(p, ar.dmg, damageArrow)
+					if ar.fire {
+						p.FireTicks = 100
+						g.sendFireState(p, true)
+					}
 					g.removeArrow(eid)
 					removed = true
 					break

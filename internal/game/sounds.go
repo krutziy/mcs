@@ -113,12 +113,18 @@ func (g *Game) mobSound(m *mob, name string) {
 // mobAmbientSoundName 生物种类 → 环境音效名（无则空）。
 func mobAmbientSoundName(kind string) string {
 	switch kind {
-	case "pig", "sheep", "cow", "chicken", "rabbit", "zombie", "skeleton":
+	case "pig", "sheep", "cow", "chicken", "rabbit", "zombie", "skeleton", "blaze":
 		return "entity." + kind + ".ambient"
 	case "creeper":
 		return "entity.creeper.primed"
 	case "enderman":
 		return "entity.enderman.ambient"
+	case "silverfish":
+		return "entity.silverfish.ambient"
+	case "villager":
+		return "entity.villager.ambient"
+	case "shulker":
+		return "entity.shulker.ambient"
 	}
 	return ""
 }
@@ -126,7 +132,8 @@ func mobAmbientSoundName(kind string) string {
 // mobHurtSoundName / mobDeathSoundName 受击/死亡音效名。
 func mobHurtSoundName(kind string) string {
 	switch kind {
-	case "pig", "sheep", "cow", "chicken", "rabbit", "zombie", "skeleton", "creeper", "enderman":
+	case "pig", "sheep", "cow", "chicken", "rabbit", "zombie", "skeleton", "creeper",
+		"enderman", "blaze", "silverfish", "shulker", "villager":
 		return "entity." + kind + ".hurt"
 	}
 	return ""
@@ -134,7 +141,8 @@ func mobHurtSoundName(kind string) string {
 
 func mobDeathSoundName(kind string) string {
 	switch kind {
-	case "pig", "sheep", "cow", "chicken", "rabbit", "zombie", "skeleton", "creeper", "enderman":
+	case "pig", "sheep", "cow", "chicken", "rabbit", "zombie", "skeleton", "creeper",
+		"enderman", "blaze", "silverfish", "shulker", "villager":
 		return "entity." + kind + ".death"
 	}
 	return ""

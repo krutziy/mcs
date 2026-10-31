@@ -164,6 +164,37 @@ func (g *Game) tryRespawnDragon(p *entity.Player, u packet.UseItemOn) bool {
 		}
 		g.syncInventory(p)
 	}
+	g.respawnCrystals++
+	if g.respawnCrystals < 4 {
+		// 先放一个柱顶水晶（原版四水晶逐个放置）
+		eid := g.nextEID.Add(1)
+		c := &endCrystal{eid: eid, uuid: entityUUID(eid), dim: DimEnd,
+			x: float64(u.X) + 0.5, y: float64(u.Y) + 1, z: float64(u.Z) + 0.5}
+		g.crystals[eid] = c
+		// 广播装饰水晶
+		for _, v := range g.players {
+			if v.Dim != DimEnd {
+				continue
+			}
+			typ := g.entityTypeID(v, "end_crystal")
+			ceid, cx, cy, cz := eid, c.x, c.y, c.z
+			v.Send.SendPlay("minecraft:add_entity", func(w *protocol.Writer) {
+				packet.SpawnEntity{EntityID: ceid, UUID: c.uuid, Type: typ,
+					X: cx, Y: cy, Z: cz}.Write(w)
+			})
+		}
+		g.blockSound(p.Dim, float64(u.X), float64(u.Y), float64(u.Z), "block.end_crystal.place")
+		return true
+	}
+	g.respawnCrystals = 0
+	for cid := range g.crystals { // 清掉装饰水晶，正式重生
+		delete(g.crystals, cid)
+		for _, v := range g.players {
+			v.Send.SendPlay("minecraft:remove_entities", func(w *protocol.Writer) {
+				packet.WriteRemoveEntities(w, []int32{cid})
+			})
+		}
+	}
 	g.dragonDefeated = false
 	g.saveEndState()
 	g.ensureDragonFight()

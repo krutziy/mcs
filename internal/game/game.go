@@ -115,6 +115,15 @@ type Game struct {
 	jukeboxes    map[[4]int32]int32       // 唱片机（位置 → 唱片物品 777 ID）
 	notePlayed   map[[4]int32]bool        // 音符盒通电边沿标记
 	fishing      map[int32]*fishingBobber // 钓鱼浮标（玩家 EID）
+	bullets      map[int32]*shulkerBullet // 潜贝贝子弹
+	endCityMobsDone bool                  // 末地城潜贝贝已布设
+	endCityLoot  map[[4]int32]bool        // 末地城箱已填充
+	carts        map[int32]*minecart      // 矿车
+	saddled      map[int32]bool           // 已上鞍的猪
+	riding       map[int32]int32          // 骑猪（玩家 EID → 猪 EID）
+	villagers    map[int32]*villagerSession // 打开中的村民交易
+	clouds       map[int32]*effectCloud     // 滞留药水云雾
+	respawnCrystals int32                   // 龙重生已放水晶数
 
 	closed atomic.Bool
 }
@@ -166,6 +175,13 @@ func New(cfg Config, suite *version.Suite) *Game {
 		jukeboxes:      map[[4]int32]int32{},
 		notePlayed:     map[[4]int32]bool{},
 		fishing:        map[int32]*fishingBobber{},
+		bullets:        map[int32]*shulkerBullet{},
+		endCityLoot:    map[[4]int32]bool{},
+		carts:          map[int32]*minecart{},
+		saddled:        map[int32]bool{},
+		riding:         map[int32]int32{},
+		villagers:      map[int32]*villagerSession{},
+		clouds:         map[int32]*effectCloud{},
 	}
 	g.blockDrops = assets.BlockDropsEx(777)
 	g.mobDrops = assets.MobDropsEx(777)
@@ -384,6 +400,10 @@ func (g *Game) tickNow() {
 	g.tickEating()
 	g.tickPortals()
 	g.tickDragon()
+	g.tickCarts()
+	g.tickClouds()
+	g.tickShulkerBullets()
+	g.tickSpawners()
 	g.tickMobSounds()
 	g.tickRedstone()
 	g.tickPistons()
@@ -502,6 +522,14 @@ func (g *Game) handleEvent(e Event) {
 		g.handleAttack(ev)
 	case *playerInteractEvent:
 		g.handleInteract(ev)
+	case *playerVehicleMoveEvent:
+		g.handleVehicleMove(ev.p, ev.x, ev.y, ev.z, ev.yaw, ev.pitch)
+	case *playerInputEvent:
+		g.handlePlayerInput(ev.p, ev.inputs)
+	case *playerCloseVillagerEvent:
+		if ev.p != nil {
+			g.closeVillager(ev.p)
+		}
 	case *playerCloseCraftEvent:
 		if ev.p != nil {
 			g.closeCrafting(ev.p)
@@ -789,6 +817,8 @@ func (g *Game) handleQuit(ev *playerQuitEvent) {
 	if _, ok := g.anvils[p.EntityID]; ok {
 		g.closeAnvil(p)
 	}
+	g.dismount(p)
+	delete(g.villagers, p.EntityID)
 	delete(g.players, p.EntityID)
 	delete(g.drags, p.EntityID)
 	g.count.Store(int32(len(g.players)))

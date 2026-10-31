@@ -32,6 +32,7 @@ func (g *Game) tryOpenChest(p *entity.Player, u packet.UseItemOn) bool {
 	if g.chests[pos] == nil {
 		g.chests[pos] = &chestState{}
 	}
+	g.maybeEndCityLoot(p, pos)
 	g.linkLargeChest(pos)
 	cs := g.chests[pos]
 	g.blockSound(p.Dim, float64(u.X), float64(u.Y), float64(u.Z), "block.chest.open")

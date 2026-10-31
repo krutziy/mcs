@@ -37,12 +37,20 @@ func (g *Game) handleInteract(ev *playerInteractEvent) {
 	if !ok {
 		return
 	}
+	// 上鞍 / 交易 / 乘坐 / 染色
+	if g.trySaddlePig(p, m) || g.tryOpenVillager(p, m) || g.tryRideEntity(p, ev.target) {
+		return
+	}
+	// 染色优先（手持染料右键羊）
+	if held := p.Held(); held.ID != 0 && g.tryDyeSheep(p, m) {
+		return
+	}
 	// 剪刀剪羊：掉 1-3 羊毛 + 受损
 	if held := p.Held(); held.ID != 0 && g.itemNameOf(p, held.ID) == "shears" {
 		if m.kind.name == "sheep" && !g.sheared[ev.target] {
 			g.sheared[ev.target] = true
 			n := int32(1 + rand.Intn(3))
-			g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: g.itemID777("white_wool"), Count: n})
+			g.spawnItem(m.dim, m.x, m.y+0.5, m.z, entity.Item{ID: g.itemID777(woolOfColor(m.color)), Count: n})
 			g.mobSound(m, "entity.sheep.shear")
 			g.damageHeld(p)
 			g.sendSheepSheared(m)

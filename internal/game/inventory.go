@@ -165,6 +165,21 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 		}
 		allSlots = slotRange(1, 44)
 		sync = func() { g.syncCrafting(p, cs) }
+	case 7: // 村民交易
+		vs, ok := g.villagers[p.EntityID]
+		if !ok {
+			return
+		}
+		ref = func(s int32) *entity.Item { return villagerSlotRef(vs, p, s) }
+		special = func(s int32) bool {
+			if s != 2 {
+				return false
+			}
+			g.takeVillagerTrade(p)
+			return true
+		}
+		allSlots = append(slotRange(3, 38), 0, 1)
+		sync = func() { g.syncVillager(p) }
 	case 0: // 玩家物品栏
 		ref = func(s int32) *entity.Item {
 			if s >= 0 && s < packet.InvSlots {

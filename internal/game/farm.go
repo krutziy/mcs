@@ -85,8 +85,23 @@ func (g *Game) tickCrops() {
 	if g.tick%30 != 0 {
 		return
 	}
-	for pos := range g.crops {
+	for pos, marker := range g.crops {
 		s := g.wd(pos[0]).GetBlock(pos[1], pos[2], pos[3])
+		// 负标记 = 下界疣（四龄）
+		if marker < 0 {
+			age := int32(-2)
+			for i, wa := range wartAges {
+				if s == wa {
+					age = int32(i)
+					break
+				}
+			}
+			if age < 0 || age >= 3 || rand.Intn(10) != 0 {
+				continue
+			}
+			g.applyBlock(pos[0], pos[1], pos[2], pos[3], wartAges[age+1], 0, nil)
+			continue
+		}
 		age := -1
 		for i, wa := range wheatAges {
 			if s == wa {
