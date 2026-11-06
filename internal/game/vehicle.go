@@ -27,6 +27,56 @@ type minecart struct {
 	moving   bool  // 有惯性
 }
 
+// railShapeFor 依邻轨自动选 shape（直线 NS/EW；两侧正交邻轨 → 弯）。
+// 邻轨集合 → 弯形映射：north+east=north_east 等。
+func railShapeFor(g *Game, dim, x, y, z int32) uint32 {
+	n := isRail(g.wd(dim).GetBlock(x, y, z-1))
+	s := isRail(g.wd(dim).GetBlock(x, y, z+1))
+	e := isRail(g.wd(dim).GetBlock(x+1, y, z))
+	w := isRail(g.wd(dim).GetBlock(x-1, y, z))
+	var shape string
+	switch {
+	case n && e:
+		shape = "north_east"
+	case n && w:
+		shape = "north_west"
+	case s && e:
+		shape = "south_east"
+	case s && w:
+		shape = "south_west"
+	case e || w:
+		shape = "east_west"
+	default:
+		shape = "north_south"
+	}
+	for st, full := range fullStateNames {
+		if full == "minecraft:rail[shape="+shape+",waterlogged=false]" {
+			return st
+		}
+	}
+	return 0
+}
+
+// autoShapeRail 放置铁轨后按邻轨修正形状（含邻轨回调修正）。
+func (g *Game) autoShapeRail(dim, x, y, z int32) {
+	w := g.wd(dim)
+	if !isRail(w.GetBlock(x, y, z)) {
+		return
+	}
+	if ns := railShapeFor(g, dim, x, y, z); ns != 0 && ns != w.GetBlock(x, y, z) {
+		g.applyBlock(dim, x, y, z, ns, 0, nil)
+	}
+	// 邻轨回调
+	for _, d := range [][3]int32{{0, 0, 1}, {0, 0, -1}, {1, 0, 0}, {-1, 0, 0}} {
+		nx, ny, nz := x+d[0], y+d[1], z+d[2]
+		if isRail(w.GetBlock(nx, ny, nz)) {
+			if ns := railShapeFor(g, dim, nx, ny, nz); ns != 0 && ns != w.GetBlock(nx, ny, nz) {
+				g.applyBlock(dim, nx, ny, nz, ns, 0, nil)
+			}
+		}
+	}
+}
+
 // tryPlaceMinecart 手持矿车右键铁轨：生成矿车。
 func (g *Game) tryPlaceMinecart(p *entity.Player, u packet.UseItemOn) bool {
 	if g.itemNameOf(p, p.Held().ID) != "minecart" {
@@ -283,7 +333,10 @@ func (g *Game) handlePlayerInput(p *entity.Player, inputs byte) {
 	if g.itemNameOf(p, p.Held().ID) == "carrot_on_a_stick" {
 		speed = 0.25 // 钓竿加速
 	}
-	if inputs&0x01 != 0 { // forward
+	if p.HorseSpeed > 0 {
+		speed = p.HorseSpeed // 马速
+	}
+	if inputs&0x01 != 0 || true { // forward（马常走）
 		yaw := float64(p.Yaw) * math.Pi / 180
 		dx, dz := -math.Sin(yaw), math.Cos(yaw)
 		nx, nz := m.x+dx*speed, m.z+dz*speed

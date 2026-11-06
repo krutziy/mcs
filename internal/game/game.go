@@ -124,6 +124,16 @@ type Game struct {
 	villagers    map[int32]*villagerSession // 打开中的村民交易
 	clouds       map[int32]*effectCloud     // 滞留药水云雾
 	respawnCrystals int32                   // 龙重生已放水晶数
+	buttonPulse  [][5]int32                // 按钮脉冲（维度+位置+到期刻）
+	plates       map[[4]int32]bool         // 已登记压力板
+	hoppers      map[[4]int32]*hopperState // 漏斗（维度+位置）
+	openHopper   map[int32][4]int32        // 打开中的漏斗
+	shulkers     map[[4]int32]*shulkerState // 潜影盒
+	openShulker  map[int32][4]int32        // 打开中的潜影盒
+	dispensers   map[[4]int32]*dispenserState8 // 发射器
+	openDispenser map[int32][4]int32       // 打开中的发射器
+	dispenserFired map[[4]int32]bool       // 发射器边沿标记
+	horses       map[int32]*horseState     // 驯服中的马
 
 	closed atomic.Bool
 }
@@ -182,6 +192,15 @@ func New(cfg Config, suite *version.Suite) *Game {
 		riding:         map[int32]int32{},
 		villagers:      map[int32]*villagerSession{},
 		clouds:         map[int32]*effectCloud{},
+		plates:         map[[4]int32]bool{},
+		hoppers:        map[[4]int32]*hopperState{},
+		openHopper:     map[int32][4]int32{},
+		shulkers:       map[[4]int32]*shulkerState{},
+		openShulker:    map[int32][4]int32{},
+		dispensers:     map[[4]int32]*dispenserState8{},
+		openDispenser:  map[int32][4]int32{},
+		dispenserFired: map[[4]int32]bool{},
+		horses:         map[int32]*horseState{},
 	}
 	g.blockDrops = assets.BlockDropsEx(777)
 	g.mobDrops = assets.MobDropsEx(777)
@@ -304,6 +323,8 @@ func New(cfg Config, suite *version.Suite) *Game {
 	g.loadWeather()
 	g.loadChests()
 	g.loadBrewings()
+	g.loadHoppers()
+	g.loadShulkers()
 	g.loadEndState()
 	g.loadInteractTables()
 	}
@@ -400,10 +421,15 @@ func (g *Game) tickNow() {
 	g.tickEating()
 	g.tickPortals()
 	g.tickDragon()
+	g.tickButtons()
+	g.tickPlates()
+	g.tickHoppers()
+	g.tickDispensers()
 	g.tickCarts()
 	g.tickClouds()
 	g.tickShulkerBullets()
 	g.tickSpawners()
+	g.tickHorseSpawning()
 	g.tickMobSounds()
 	g.tickRedstone()
 	g.tickPistons()
@@ -450,6 +476,8 @@ func (g *Game) saveAll() {
 	_ = os.WriteFile(filepath.Join(g.Cfg.SaveDir, "time.json"), mb, 0o644)
 	g.saveFurnaces()
 	g.saveChests()
+		g.saveHoppers()
+		g.saveShulkers()
 	g.saveBrewings()
 	g.saveWeather()
 	for _, p := range g.players {

@@ -92,6 +92,8 @@ func (g *Game) handleDig(ev *blockDigEvent) {
 		g.harvestWart(p, p.Dim, a.X, a.Y, a.Z, old)
 	}
 	dpos := [4]int32{p.Dim, a.X, a.Y, a.Z}
+	g.dropHopperContents(dpos)
+	g.dropShulkerContents(dpos)
 	g.dropFurnaceContents(dpos)
 	g.dropChestContents(dpos)
 	g.dropBrewingContents(dpos)
@@ -344,7 +346,9 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 
 	if g.tryIgniteTnt(p, u) || g.tryIgniteFire(p, u) || g.tryIgnitePortal(p, u) ||
 		g.tryPlaceEyeInFrame(p, u) || g.tryRespawnDragon(p, u) ||
-		g.tryTuneNoteBlock(p, u) || g.tryUseJukebox(p, u) {
+		g.tryTuneNoteBlock(p, u) || g.tryUseJukebox(p, u) ||
+		g.pressButton(p, u) || g.toggleTrapdoorOrGate(p, u) ||
+		g.tryOpenHopper(p, u) || g.tryOpenShulker(p, u) || g.tryOpenDispenser(p, u) {
 		return
 	}
 	held := p.Held()
@@ -382,6 +386,10 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	g.applyBlock(p.Dim, tx, ty, tz, state, u.Sequence, p)
 	if state >= world.FireMin && state <= world.FireMax {
 		g.trackFire(p.Dim, tx, ty, tz)
+	}
+	g.trackPlate(p.Dim, tx, ty, tz, state)
+	if isRail(state) {
+		g.autoShapeRail(p.Dim, tx, ty, tz)
 	}
 	bus.State, bus.ItemID = state, held.ID
 	g.scheduleRedstoneUpdate(p.Dim, tx, ty, tz)

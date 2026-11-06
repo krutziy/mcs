@@ -37,8 +37,9 @@ func (g *Game) handleInteract(ev *playerInteractEvent) {
 	if !ok {
 		return
 	}
-	// 上鞍 / 交易 / 乘坐 / 染色
-	if g.trySaddlePig(p, m) || g.tryOpenVillager(p, m) || g.tryRideEntity(p, ev.target) {
+	// 马 / 上鞍 / 交易 / 乘坐 / 染色
+	if g.tryHorseInteract(p, m) || g.trySaddlePig(p, m) ||
+		g.tryOpenVillager(p, m) || g.tryRideEntity(p, ev.target) {
 		return
 	}
 	// 染色优先（手持染料右键羊）

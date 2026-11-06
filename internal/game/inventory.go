@@ -165,6 +165,34 @@ func (g *Game) handleContainerClick(ev *playerContainerClickEvent) {
 		}
 		allSlots = slotRange(1, 44)
 		sync = func() { g.syncCrafting(p, cs) }
+	case 8: // 漏斗
+		pos, ok := g.openHopper[p.EntityID]
+		if !ok || g.hoppers[pos] == nil {
+			return
+		}
+		hs := g.hoppers[pos]
+		ref = func(s int32) *entity.Item { return hopperSlotRef(hs, p, s) }
+		allSlots = append(slotRange(0, 4), slotRange(5, 40)...)
+		sync = func() { g.syncHopper(p, pos) }
+	case 9: // 潜影盒
+		pos, ok := g.openShulker[p.EntityID]
+		if !ok || g.shulkers[pos] == nil {
+			return
+		}
+		ss := g.shulkers[pos]
+		ref = func(s int32) *entity.Item { return shulkerSlotRef(ss, p, s) }
+		quick = func(s int32) { g.quickMoveShulker(p, ss, s) }
+		allSlots = slotRange(0, 62)
+		sync = func() { g.syncShulkerBox(p, pos) }
+	case 10: // 发射器
+		pos, ok := g.openDispenser[p.EntityID]
+		if !ok || g.dispensers[pos] == nil {
+			return
+		}
+		ds := g.dispensers[pos]
+		ref = func(s int32) *entity.Item { return dispenserSlotRef(ds, p, s) }
+		allSlots = slotRange(0, 44)
+		sync = func() { g.syncDispenser(p, pos) }
 	case 7: // 村民交易
 		vs, ok := g.villagers[p.EntityID]
 		if !ok {

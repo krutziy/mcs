@@ -166,19 +166,6 @@ func TestFacingPlacement(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && indexOf(s, sub) >= 0)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
 // TestDoubleChest 双箱：相邻放置 → 54 格共享。
 func TestDoubleChest(t *testing.T) {
 	g, p, _ := newInteractGame(t)

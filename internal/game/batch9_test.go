@@ -227,6 +227,7 @@ func TestVillagerTrade(t *testing.T) {
 	if vs == nil {
 		t.Fatal("应有会话")
 	}
+	vs.profession = "farmer" // 测试固定职业（小麦贸易在农民表）
 	// 放 20 小麦 → 匹配 → 成交
 	vs.slots[0] = entity.Item{ID: g.itemFor(p, ids["wheat"]), Count: 20}
 	if _, ok := g.matchVillagerTrade(p, vs); !ok {

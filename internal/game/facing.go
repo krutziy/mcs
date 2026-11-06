@@ -19,6 +19,13 @@ var stateGroupKey = map[uint32]string{}
 
 // loadFacingTables 解析 blocknames_full 构建 facing 族表。
 func (g *Game) loadFacingTables() {
+	// 全名/短名查找表（redstone2 的开关翻转与音色判定用）
+	for st, nm := range assets.BlockNames(777) {
+		blockNameLookup[st] = nm
+	}
+	for st, full := range assets.BlockNamesFull(777) {
+		fullStateNames[st] = full
+	}
 	if len(facingGroups) > 0 {
 		return
 	}

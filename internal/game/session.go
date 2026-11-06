@@ -252,6 +252,21 @@ func (s *Session) PlayLoop() {
 				s.game.Submit(&playerCloseAnvilEvent{p: p})
 			case 7:
 				s.game.Submit(&playerCloseVillagerEvent{p: p})
+			case 8:
+				if pl := s.player.Load(); pl != nil {
+					delete(s.game.openHopper, pl.EntityID)
+					s.game.syncInventory(pl)
+				}
+			case 9:
+				if pl := s.player.Load(); pl != nil {
+					delete(s.game.openShulker, pl.EntityID)
+					s.game.syncInventory(pl)
+				}
+			case 10:
+				if pl := s.player.Load(); pl != nil {
+					delete(s.game.openDispenser, pl.EntityID)
+					s.game.syncInventory(pl)
+				}
 			}
 		case "minecraft:attack":
 			s.game.Submit(&playerAttackEvent{p: p, target: pr.VarInt()})

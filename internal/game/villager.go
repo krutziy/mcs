@@ -35,7 +35,8 @@ var villagerTrades = []villagerTrade{
 
 // villagerSession 打开中的交易会话。
 type villagerSession struct {
-	slots [2]entity.Item // 0/1 输入
+	slots      [2]entity.Item // 0/1 输入
+	profession string
 }
 
 // tryOpenVillager 右键村民：打开交易窗口。
@@ -43,11 +44,22 @@ func (g *Game) tryOpenVillager(p *entity.Player, m *mob) bool {
 	if m.kind.name != "villager" {
 		return false
 	}
-	g.villagers[p.EntityID] = &villagerSession{}
+	g.villagers[p.EntityID] = &villagerSession{profession: villagerProfession(m)}
+	title := "Villager"
+	switch g.villagers[p.EntityID].profession {
+	case "farmer":
+		title = "Farmer"
+	case "butcher":
+		title = "Butcher"
+	case "librarian":
+		title = "Librarian"
+	case "blacksmith":
+		title = "Smith"
+	}
 	p.Send.SendPlay("minecraft:open_screen", func(w *protocol.Writer) {
-		packet.WriteOpenScreen(w, menuMerchant, "Villager")
+		packet.WriteOpenScreen(w, menuMerchant, title)
 	})
-	g.sendTradeList(p)
+	g.sendTradeListProf(p, g.villagers[p.EntityID].profession)
 	g.syncVillager(p)
 	g.mobSound(m, "entity.villager.trade")
 	return true
@@ -56,7 +68,6 @@ func (g *Game) tryOpenVillager(p *entity.Player, m *mob) bool {
 // sendTradeList 下发 trade_list（窗口 7；无组件匹配器 = 空）。
 func (g *Game) sendTradeList(p *entity.Player) {
 	trades := villagerTrades
-	proto := g.playerProto(p)
 	p.Send.SendPlay("minecraft:trade_list", func(w *protocol.Writer) {
 		w.VarInt(7) // 窗口号
 		w.VarInt(int32(len(trades)))
@@ -87,7 +98,7 @@ func (g *Game) sendTradeList(p *entity.Player) {
 		w.Bool(true)   // regular villager
 		w.Bool(false)  // can restock
 	})
-	_ = proto
+
 }
 
 // villagerSlotRef 窗口 7 槽位：0/1 输入、2 结果（只读）、3-29 背包、30-38 快捷栏。
@@ -120,6 +131,7 @@ func (g *Game) syncVillager(p *entity.Player) {
 	for i := int32(3); i <= 29; i++ {
 		slots[i] = itemSlotOf(p.Slots[9+(i-3)])
 	}
+
 	for i := int32(30); i <= 38; i++ {
 		slots[i] = itemSlotOf(p.Slots[36+(i-30)])
 	}
@@ -140,7 +152,7 @@ func (g *Game) matchVillagerTrade(p *entity.Player, vs *villagerSession) (villag
 	if vs.slots[1].ID != 0 {
 		name2 = g.itemNameOf(p, vs.slots[1].ID)
 	}
-	for _, t := range villagerTrades {
+	for _, t := range professionTrades(vs.profession) {
 		if name1 != t.input1 || vs.slots[0].Count < t.count1 {
 			continue
 		}
@@ -167,7 +179,7 @@ func (g *Game) takeVillagerTrade(p *entity.Player) {
 	if vs.slots[1].ID != 0 {
 		name2 = g.itemNameOf777(g.canonItem(p, vs.slots[1].ID))
 	}
-	for _, t := range villagerTrades {
+	for _, t := range professionTrades(vs.profession) {
 		if name1 != t.input1 || vs.slots[0].Count < t.count1 {
 			continue
 		}

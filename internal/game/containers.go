@@ -421,6 +421,63 @@ func (g *Game) doubleClickWindow(p *entity.Player, slot int32, ref func(int32) *
 	g.collectToCursor(p, refs)
 }
 
+// quickMoveShulker 潜影盒窗口 shift：盒↔背包。
+func (g *Game) quickMoveShulker(p *entity.Player, ss *shulkerState, slot int32) {
+	if slot >= 0 && slot <= 26 { // 盒 → 背包
+		var refs []*entity.Item
+		for i := range ss.slots {
+			refs = append(refs, &ss.slots[i])
+		}
+		g.quickMoveRefs(p, &ss.slots[slot], refs, invRefs(p))
+		return
+	}
+	// 背包 → 盒
+	var refs []*entity.Item
+	for i := range ss.slots {
+		refs = append(refs, &ss.slots[i])
+	}
+	if r := shulkerSlotRef(ss, p, slot); r != nil {
+		g.quickMoveRefs(p, r, invRefs(p), refs)
+	}
+}
+
+// quickMoveRefs 通用：把 src 移入 dsts（先合并后空位）。
+func (g *Game) quickMoveRefs(p *entity.Player, src *entity.Item, skip []*entity.Item, dsts []*entity.Item) {
+	if src.ID == 0 {
+		return
+	}
+	limit := g.stackOf(p, src.ID)
+	skipSet := map[*entity.Item]bool{}
+	for _, s := range skip {
+		skipSet[s] = true
+	}
+	if len(src.Ench) == 0 && src.Damage == 0 {
+		for _, d := range dsts {
+			if skipSet[d] || src.Count <= 0 {
+				continue
+			}
+			if d.ID == src.ID && d.Count > 0 && d.Count < limit && len(d.Ench) == 0 {
+				add := min32(limit-d.Count, src.Count)
+				d.Count += add
+				src.Count -= add
+			}
+		}
+	}
+	for _, d := range dsts {
+		if skipSet[d] || src.Count <= 0 {
+			continue
+		}
+		if d.ID == 0 {
+			*d = *src
+			*src = entity.Item{}
+			return
+		}
+	}
+	if src.Count <= 0 {
+		*src = entity.Item{}
+	}
+}
+
 // slotRange 生成 [a,b] 槽位列表。
 func slotRange(a, b int32) []int32 {
 	out := make([]int32, 0, b-a+1)

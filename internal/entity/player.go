@@ -78,7 +78,8 @@ type Player struct {
 	EatItem     int32   // 进食中的物品快照（ID 变化则中断）
 
 	// 载具（正在乘坐的实体 EID；0 = 步行）
-	Vehicle int32
+	Vehicle    int32
+	HorseSpeed float64 // 骑马速度（0 = 非马）
 
 	// 弓蓄力（≥0 计时中；-1 未拉）与末影珍珠冷却
 	BowTicks int32

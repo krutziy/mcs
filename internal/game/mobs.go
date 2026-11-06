@@ -36,6 +36,7 @@ var mobKinds = map[string]mobKind{
 	"silverfish": {name: "silverfish", health: 8, speed: 0.09, hostile: true, damage: 1},
 	"shulker":    {name: "shulker", health: 30, speed: 0, hostile: true, damage: 0},
 	"villager":   {name: "villager", health: 20, speed: 0.05},
+	"horse":      {name: "horse", health: 22, speed: 0.2},
 }
 
 var passiveKinds = []string{"pig", "sheep", "cow", "chicken", "rabbit"}
