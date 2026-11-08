@@ -37,6 +37,34 @@ var villagerTrades = []villagerTrade{
 type villagerSession struct {
 	slots      [2]entity.Item // 0/1 输入
 	profession string
+	uses       map[string]int32 // 贸易键（input1→output）→ 已用次数
+	restockDay int64            // 上次补货的世界日
+}
+
+// tradeKey 贸易的唯一键。
+func tradeKey(t villagerTrade) string { return t.input1 + ">" + t.output }
+
+// restockVillagerIfNeeded 新的一天重置全部交易次数（原版补货）。
+func (g *Game) restockVillagerIfNeeded(p *entity.Player) {
+	vs, ok := g.villagers[p.EntityID]
+	if !ok {
+		return
+	}
+	day := g.worldAge / 24000
+	if day != vs.restockDay {
+		vs.restockDay = day
+		vs.uses = map[string]int32{}
+		g.sendTradeListProf(p, vs.profession) // 窗口刷新为可用
+	}
+}
+
+// villagerTradeUses 该贸易当前已用次数。
+func (g *Game) villagerTradeUses(p *entity.Player, t villagerTrade) int32 {
+	vs, ok := g.villagers[p.EntityID]
+	if !ok || vs.uses == nil {
+		return 0
+	}
+	return vs.uses[tradeKey(t)]
 }
 
 // tryOpenVillager 右键村民：打开交易窗口。
@@ -59,6 +87,7 @@ func (g *Game) tryOpenVillager(p *entity.Player, m *mob) bool {
 	p.Send.SendPlay("minecraft:open_screen", func(w *protocol.Writer) {
 		packet.WriteOpenScreen(w, menuMerchant, title)
 	})
+	g.restockVillagerIfNeeded(p)
 	g.sendTradeListProf(p, g.villagers[p.EntityID].profession)
 	g.syncVillager(p)
 	g.mobSound(m, "entity.villager.trade")
@@ -85,8 +114,8 @@ func (g *Game) sendTradeList(p *entity.Player) {
 			} else {
 				w.Bool(false)
 			}
-			w.Bool(false)   // disabled
-			w.Int32(0)      // uses
+			w.Bool(false)   // disabled（真实计数在 takeVillager 校验）
+			w.Int32(0)      // uses（窗口静态下发；动态禁用由成交校验）
 			w.Int32(12)     // max uses
 			w.Int32(0)      // xp
 			w.Int32(0)      // special price
@@ -189,7 +218,18 @@ func (g *Game) takeVillagerTrade(p *entity.Player) {
 		if t.input2 != "" && (name2 != t.input2 || vs.slots[1].Count < t.count2) {
 			continue
 		}
-		// 成交：扣输入、给输出
+		// 次数检查（原版每日 12 次上限，新日补货）
+		g.restockVillagerIfNeeded(p)
+		if vs.uses == nil {
+			vs.uses = map[string]int32{}
+		}
+		if vs.uses[tradeKey(t)] >= 12 {
+			g.playSoundTo(p, SoundPlayer, "entity.villager.no", 1, 1)
+			g.sendTradeListProf(p, vs.profession)
+			return
+		}
+		// 成交：扣输入、给输出、计数
+		vs.uses[tradeKey(t)]++
 		vs.slots[0].Count -= t.count1
 		if vs.slots[0].Count <= 0 {
 			vs.slots[0] = entity.Item{}

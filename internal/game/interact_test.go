@@ -1140,3 +1140,46 @@ func TestPoweredRailRedstoneFlip(t *testing.T) {
 		t.Fatal("断电后动力轨应 powered=false")
 	}
 }
+
+// TestVillagerRestock 村民交易：每日 12 次上限 + 新日补货。
+func TestVillagerRestock(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	ids := assets.ItemIDs(777)
+	m := g.spawnMob("villager", 8.5, -60, 8.5)
+	g.villagers[p.EntityID] = &villagerSession{profession: "farmer"}
+	vs := g.villagers[p.EntityID]
+
+	// 20 小麦换 1 绿宝石（farmer 首条贸易）
+	var trade villagerTrade
+	for _, tr := range professionTrades("farmer") {
+		if tr.input1 == "wheat" {
+			trade = tr
+			break
+		}
+	}
+	if trade.input1 == "" {
+		t.Skip("farmer 无小麦贸易")
+	}
+	// 交易 12 次后拒绝
+	for i := 0; i < 12; i++ {
+		vs.slots[0] = entity.Item{ID: g.itemFor(p, ids["wheat"]), Count: trade.count1}
+		g.takeVillagerTrade(p)
+	}
+	if vs.uses[tradeKey(trade)] != 12 {
+		t.Fatalf("应计 12 次: %d", vs.uses[tradeKey(trade)])
+	}
+	vs.slots[0] = entity.Item{ID: g.itemFor(p, ids["wheat"]), Count: trade.count1}
+	before := p.Slots[36].Count + p.Slots[37].Count + p.Slots[38].Count
+	g.takeVillagerTrade(p)
+	after := p.Slots[36].Count + p.Slots[37].Count + p.Slots[38].Count
+	if after != before {
+		t.Fatal("超限交易不应成交")
+	}
+	// 新的一天 → 补货
+	g.worldAge += 24000
+	g.restockVillagerIfNeeded(p)
+	if vs.uses[tradeKey(trade)] != 0 {
+		t.Fatal("新日应补货清零")
+	}
+	_ = m
+}
