@@ -159,19 +159,21 @@ func TestShulkerBox(t *testing.T) {
 	}
 	ids := assets.ItemIDs(777)
 	ss.slots[0] = entity.Item{ID: ids["diamond"], Count: 7}
-	// 破坏：掉盒+内容
+	// 破坏：整盒带内容（原版行为，v26.3.17 起钻石在盒 Contents 里）
 	g.dropShulkerContents(pos)
-	boxFound, dia := false, int32(0)
+	boxFound, inBox := false, int32(0)
 	for _, ie := range g.items {
 		if ie.item.ID == ids["shulker_box"] {
 			boxFound = true
-		}
-		if ie.item.ID == ids["diamond"] {
-			dia += ie.item.Count
+			for _, c := range ie.item.Contents {
+				if c.ID == ids["diamond"] {
+					inBox += c.Count
+				}
+			}
 		}
 	}
-	if !boxFound || dia != 7 {
-		t.Fatalf("应掉盒+7 钻: box=%v dia=%d", boxFound, dia)
+	if !boxFound || inBox != 7 {
+		t.Fatalf("应掉整盒含 7 钻: box=%v inBox=%d", boxFound, inBox)
 	}
 }
 

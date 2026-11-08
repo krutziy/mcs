@@ -143,7 +143,8 @@ func (g *Game) recomputeRedstone(dim int32) {
 					wires = append(wires, rsPos{wx, wy, wz})
 				case s == torchLit || s == torchUnlit:
 					torches = append(torches, rsPos{wx, wy, wz})
-				case s == rsBlock || s == leverOn || s == comparatorOn || s == comparatorSubOn:
+				case s == rsBlock || s == leverOn || s == comparatorOn || s == comparatorSubOn ||
+					(isDetectorRail(s) && railPoweredProp(s)):
 					sources = append(sources, rsPos{wx, wy, wz})
 				case s == lampOn || s == lampOff:
 					lamps = append(lamps, rsPos{wx, wy, wz})
@@ -294,6 +295,31 @@ func (g *Game) recomputeRedstone(dim int32) {
 			g.setRS(dim, t.x, t.y, t.z, ns)
 		}
 	}
+	// 6) 动力轨按邻电翻转 powered（探测轨由矿车驱动，见 tickDetectorRails）
+	w.EachChunk(func(cx, cz int32, ch *world.Chunk) {
+		for i := int32(0); i < world.NumSections; i++ {
+			sec := ch.Section(i)
+			if sec == nil {
+				continue
+			}
+			for idx := int32(0); idx < world.SectionVol; idx++ {
+				s := sec.Blocks[idx]
+				if !isPoweredRail(s) {
+					continue
+				}
+				y := i*16 + idx>>8
+				z := (idx>>4)&15
+				x := idx & 15
+				wx, wy, wz := cx*16+x, y+world.MinY, cz*16+z
+				if powered := g.posPowered(dim, wx, wy, wz); powered != railPoweredProp(s) {
+					if ns := flipRailPowered(s); ns != 0 {
+						w.SetBlock(wx, wy, wz, ns)
+						g.setRS(dim, wx, wy, wz, ns)
+					}
+				}
+			}
+		}
+	})
 	g.flushBlockUpdates()
 }
 

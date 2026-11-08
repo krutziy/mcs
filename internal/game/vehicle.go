@@ -30,10 +30,10 @@ type minecart struct {
 // railShapeFor 依邻轨自动选 shape（直线 NS/EW；两侧正交邻轨 → 弯）。
 // 邻轨集合 → 弯形映射：north+east=north_east 等。
 func railShapeFor(g *Game, dim, x, y, z int32) uint32 {
-	n := isRail(g.wd(dim).GetBlock(x, y, z-1))
-	s := isRail(g.wd(dim).GetBlock(x, y, z+1))
-	e := isRail(g.wd(dim).GetBlock(x+1, y, z))
-	w := isRail(g.wd(dim).GetBlock(x-1, y, z))
+	n := isAnyRail(g.wd(dim).GetBlock(x, y, z-1))
+	s := isAnyRail(g.wd(dim).GetBlock(x, y, z+1))
+	e := isAnyRail(g.wd(dim).GetBlock(x+1, y, z))
+	w := isAnyRail(g.wd(dim).GetBlock(x-1, y, z))
 	var shape string
 	switch {
 	case n && e:
@@ -82,7 +82,7 @@ func (g *Game) tryPlaceMinecart(p *entity.Player, u packet.UseItemOn) bool {
 	if g.itemNameOf(p, p.Held().ID) != "minecart" {
 		return false
 	}
-	if !isRail(g.w(p).GetBlock(u.X, u.Y, u.Z)) {
+	if !isAnyRail(g.w(p).GetBlock(u.X, u.Y, u.Z)) {
 		return false
 	}
 	g.spawnMinecartAt(p.Dim, float64(u.X)+0.5, float64(u.Y)+0.06, float64(u.Z)+0.5, 0)
@@ -226,7 +226,7 @@ func (g *Game) tickCarts() {
 		w := g.wd(mc.dim)
 		if mc.rider != 0 {
 			// 有人：位置由 move_vehicle 驱动；掉下轨道则下车
-			if !isRail(w.GetBlock(floorI(mc.x), floorI(mc.y-0.1), floorI(mc.z))) &&
+			if !isAnyRail(w.GetBlock(floorI(mc.x), floorI(mc.y-0.1), floorI(mc.z))) &&
 				!g.blockAtDim(mc.dim, floorI(mc.x), floorI(mc.y-0.1), floorI(mc.z)) {
 				if p := g.players[mc.rider]; p != nil {
 					g.dismount(p)
@@ -235,10 +235,11 @@ func (g *Game) tickCarts() {
 			continue
 		}
 		// 空车：重力 + 摩擦；落轨滑行简化为水平摩擦
+		g.cartRailBoost(mc) // 动力轨加速/刹车（有人乘坐时同样生效于车辆速度）
 		if mc.moving || mc.vy != 0 {
 			mc.vy -= 0.04
 			ny := mc.y + mc.vy
-			onRail := isRail(w.GetBlock(floorI(mc.x), floorI(mc.y-0.06), floorI(mc.z)))
+			onRail := isAnyRail(w.GetBlock(floorI(mc.x), floorI(mc.y-0.06), floorI(mc.z)))
 			if onRail {
 				ny = mc.y
 				mc.vy = 0

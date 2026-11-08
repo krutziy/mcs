@@ -10,11 +10,12 @@ const InvSlots = 46
 
 // ItemSlot 是物品槽（ID 0 = 空）。
 type ItemSlot struct {
-	ID     int32
-	Count  int32
-	Damage int32  // 已损失耐久（>0 时输出 damage 组件，组件 ID 3）
-	Potion string // 药水短名（非空时输出 potion_contents 组件，组件 ID 26）
+	ID       int32
+	Count    int32
+	Damage   int32     // 已损失耐久（>0 时输出 damage 组件，组件 ID 3）
+	Potion   string    // 药水短名（非空时输出 potion_contents 组件，组件 ID 26）
 	EnchList []EnchPair // 附魔列表（非空时输出 enchantments 组件，组件 ID 23）
+	Contents []ItemSlot // 潜影盒内容（非空时输出 container 组件，组件 ID 77）
 }
 
 // EnchPair 一条附魔（名称 + 等级）。
@@ -64,6 +65,9 @@ func WriteItemSlotSmart(w *protocol.Writer, s ItemSlot) {
 	if s.Potion != "" {
 		n++
 	}
+	if len(s.Contents) > 0 {
+		n++
+	}
 	w.VarInt(int32(n))
 	if s.Damage > 0 {
 		w.VarInt(3)
@@ -81,7 +85,41 @@ func WriteItemSlotSmart(w *protocol.Writer, s ItemSlot) {
 		w.VarInt(26)
 		writePotionContents(w, s.Potion)
 	}
+	if len(s.Contents) > 0 {
+		w.VarInt(77) // minecraft:container（潜影盒内容列表）
+		writeContainerContents(w, s.Contents)
+	}
 	w.VarInt(0)
+}
+
+// writeContainerContents container 组件载荷：NBT 匿名根 TAG_List of
+// Compound{Slot:int, id:string, count:int}（原版潜影盒物品栈格式）。
+func writeContainerContents(w *protocol.Writer, items []ItemSlot) {
+	var lst protocol.List
+	for i, it := range items {
+		if it.ID == 0 {
+			continue
+		}
+		lst = append(lst, protocol.Compound{
+			"Slot":   int32(i),
+			"id":     itemNameWire(it.ID),
+			"count":  it.Count,
+		})
+	}
+	protocol.WriteNBTList(w, lst)
+}
+
+// itemNameWire 由 777 基准物品 ID 查规范名（潜影盒 NBT 用，惰性注入）。
+var itemNamesByID = map[int32]string{}
+
+// SetItemNamesByID 注入 777 物品名表。
+func SetItemNamesByID(m map[int32]string) { itemNamesByID = m }
+
+func itemNameWire(id int32) string {
+	if n := itemNamesByID[id]; n != "" {
+		return n
+	}
+	return "minecraft:stone"
 }
 
 // WriteItemSlotOrEmpty 按 ID 是否为 0 选择空 Slot 或智能组件 Slot。

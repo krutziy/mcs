@@ -23,8 +23,11 @@ func (g *Game) loadFacingTables() {
 	for st, nm := range assets.BlockNames(777) {
 		blockNameLookup[st] = nm
 	}
-	for st, full := range assets.BlockNamesFull(777) {
-		fullStateNames[st] = full
+	if nbf := assets.BlockNamesFull(777); nbf != nil {
+		for st, full := range nbf {
+			fullStateNames[st] = full
+			stateByFullName[full] = st
+		}
 	}
 	if len(facingGroups) > 0 {
 		return

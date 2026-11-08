@@ -251,11 +251,16 @@ func writeEnchSlot(w *protocol.Writer, itemID, count int32, list []entity.EnchEn
 	w.VarInt(0)
 }
 
-// itemSlotOf entity.Item → packet.ItemSlot（附魔列表带过）。
+// itemSlotOf entity.Item → packet.ItemSlot（附魔列表与潜影盒内容带过）。
 func itemSlotOf(it entity.Item) packet.ItemSlot {
 	s := packet.ItemSlot{ID: it.ID, Count: it.Count, Damage: it.Damage}
 	for _, e := range it.Ench {
 		s.EnchList = append(s.EnchList, packet.EnchPair{Name: e.Name, Level: e.Level})
+	}
+	for _, c := range it.Contents {
+		if c.ID != 0 {
+			s.Contents = append(s.Contents, packet.ItemSlot{ID: c.ID, Count: c.Count, Damage: c.Damage})
+		}
 	}
 	return s
 }

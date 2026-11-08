@@ -102,7 +102,8 @@ type Game struct {
 	brewing      map[[2]string]string      // 酿造表（输入药水+材料 → 产物）
 	enchOpen     map[int32]bool           // 打开附魔台的玩家
 	enchants     map[string]assets.EnchantInfo // 附魔表
-	rsDirty      bool                     // 红石网络待重算
+	rsDirty      bool
+	detectorHot  map[[4]int32]bool       // 通电中的探测轨                     // 红石网络待重算
 	observerPulse [][5]int32                // 观察者脉冲（维度+位置+到期刻）
 	anvils       map[int32]*anvilSession  // 打开中的铁砧
 	blockNames   map[uint32]string         // 方块状态 → 名（777 基准）
@@ -188,6 +189,7 @@ func New(cfg Config, suite *version.Suite) *Game {
 		bullets:        map[int32]*shulkerBullet{},
 		endCityLoot:    map[[4]int32]bool{},
 		carts:          map[int32]*minecart{},
+		detectorHot:  map[[4]int32]bool{},
 		saddled:        map[int32]bool{},
 		riding:         map[int32]int32{},
 		villagers:      map[int32]*villagerSession{},
@@ -339,6 +341,18 @@ func New(cfg Config, suite *version.Suite) *Game {
 		}
 	}
 	g.loadFacingTables()
+	if nbf := assets.BlockNamesFull(777); nbf != nil {
+		m := make(map[int32]string, len(nbf))
+		for st, full := range nbf {
+			_ = st
+			_ = full
+		}
+		_ = m
+	}
+	{
+		g.itemNameOf777(1) // 惰性建缓存
+		packet.SetItemNamesByID(g.itemNameCache)
+	}
 	g.nextEID.Store(100)
 	go g.run()
 	return g
@@ -432,6 +446,7 @@ func (g *Game) tickNow() {
 	g.tickHorseSpawning()
 	g.tickMobSounds()
 	g.tickRedstone()
+	g.tickDetectorRails()
 	g.tickPistons()
 	g.tickComparators()
 	g.tickObservers()

@@ -247,3 +247,14 @@ func readNBTPayload(r *Reader, id byte, depth int) any {
 		return nil
 	}
 }
+
+// WriteNBTList 写入匿名根 TAG_List（container 组件等列表载荷用）：
+// tagID(9) + 元素类型 + 数量 + 各元素载荷（compound 元素自带 0x00 收尾）。
+func WriteNBTList(w *Writer, root List) {
+	w.Uint8(TagList)
+	w.Uint8(tagIDOfList(root))
+	w.VarInt(int32(len(root)))
+	for _, e := range root {
+		writeNBTPayload(w, e, 1)
+	}
+}

@@ -4,6 +4,7 @@ package game
 // 潜影盒（27 格容器，破坏保留内容）、发射器（通电射箭/掉落物品）。
 
 import (
+	"strings"
 	"encoding/json"
 	"os"
 
@@ -171,13 +172,13 @@ func (g *Game) dropShulkerContents(pos [4]int32) {
 			delete(g.openShulker, eid)
 		}
 	}
-	g.spawnItem(pos[0], float64(pos[1])+0.5, float64(pos[2])+0.5, float64(pos[3])+0.5,
-		entity.Item{ID: g.itemID777("shulker_box"), Count: 1})
+	box := entity.Item{ID: g.itemID777("shulker_box"), Count: 1}
 	for _, it := range ss.slots {
 		if it.ID != 0 {
-			g.spawnItem(pos[0], float64(pos[1])+0.5, float64(pos[2])+0.5, float64(pos[3])+0.5, it)
+			box.Contents = append(box.Contents, it) // 整盒带内容（原版行为）
 		}
 	}
+	g.spawnItem(pos[0], float64(pos[1])+0.5, float64(pos[2])+0.5, float64(pos[3])+0.5, box)
 }
 
 // tickHoppers 漏斗传输：每 4 刻一档 —— 上方容器取 1 / 下方容器送 1 / 捡上方掉落物。
@@ -190,7 +191,7 @@ func (g *Game) tickHoppers() {
 		_ = hs.cd
 		// 1) 送下方容器（箱/熔炉输入/酿造材料/漏斗/潜影盒）
 		below := [4]int32{dim, x, y - 1, z}
-		if hs.slots[0].ID != 0 { // 只从首槽送（先进先出）
+		if it, _ := hopperFirstItem(hs); it.ID != 0 { // 随机槽起点送出
 			if g.hopperPushOut(hs, below) {
 				continue // 一刻一档
 			}
@@ -246,12 +247,25 @@ func (g *Game) hopperAbsorb(hs *hopperState, it entity.Item) bool {
 	return false
 }
 
+// hopperFirstItem 随机槽起点取首个非空件（原版从随机槽扫描）。
+func hopperFirstItem(hs *hopperState) (entity.Item, int32) {
+	start := hopperScanOrder()
+	for k := int32(0); k < 5; k++ {
+		i := (start + k) % 5
+		if hs.slots[i].ID != 0 {
+			return hs.slots[i], i
+		}
+	}
+	return entity.Item{}, 0
+}
+
 // hopperPushOut 送 1 件到目标容器。返回是否成功。
 func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
-	it := hs.slots[0]
+	it, src := hopperFirstItem(hs)
 	if it.ID == 0 {
 		return false
 	}
+	clear := func() { hs.slots[src] = entity.Item{} }
 	// 目标类型
 	w := g.wd(target[0])
 	tb := w.GetBlock(target[1], target[2], target[3])
@@ -277,7 +291,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 				s.Count += add
 				it.Count -= add
 				if it.Count <= 0 {
-					hs.slots[0] = entity.Item{}
+					clear()
 					return true
 				}
 			}
@@ -285,7 +299,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 		for i := 0; i < n; i++ {
 			if cs.slots[i].ID == 0 {
 				cs.slots[i] = it
-				hs.slots[0] = entity.Item{}
+				clear()
 				return true
 			}
 		}
@@ -298,7 +312,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 		// 送输入槽
 		if fs.input.ID == 0 {
 			fs.input = it
-			hs.slots[0] = entity.Item{}
+			clear()
 			return true
 		}
 		if fs.input.ID == it.ID && fs.input.Count < 64 {
@@ -309,7 +323,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 			fs.input.Count += add
 			it.Count -= add
 			if it.Count <= 0 {
-				hs.slots[0] = entity.Item{}
+				clear()
 				return true
 			}
 		}
@@ -317,7 +331,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 		if g.fuelTime(g.itemNameOf777(it.ID)) > 0 {
 			if fs.fuel.ID == 0 {
 				fs.fuel = it
-				hs.slots[0] = entity.Item{}
+				clear()
 				return true
 			}
 			if fs.fuel.ID == it.ID && fs.fuel.Count < 64 {
@@ -326,7 +340,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 					add = it.Count
 				}
 				fs.fuel.Count += add
-				hs.slots[0] = entity.Item{}
+				clear()
 				return true
 			}
 		}
@@ -338,7 +352,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 		}
 		if bs.slots[3].ID == 0 { // 材料槽
 			bs.slots[3] = it
-			hs.slots[0] = entity.Item{}
+			clear()
 			return true
 		}
 	case tb == hopperBlock:
@@ -348,7 +362,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 			g.hoppers[target] = th
 		}
 		if g.hopperAbsorb(th, it) {
-			hs.slots[0] = entity.Item{}
+			clear()
 			return true
 		}
 	case tname == "shulker_box" || contains(tname, "_shulker_box"):
@@ -367,7 +381,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 				s.Count += add
 				it.Count -= add
 				if it.Count <= 0 {
-					hs.slots[0] = entity.Item{}
+					clear()
 					return true
 				}
 			}
@@ -375,7 +389,7 @@ func (g *Game) hopperPushOut(hs *hopperState, target [4]int32) bool {
 		for i := 0; i < 27; i++ {
 			if ss.slots[i].ID == 0 {
 				ss.slots[i] = it
-				hs.slots[0] = entity.Item{}
+				clear()
 				return true
 			}
 		}
@@ -524,26 +538,28 @@ func (g *Game) dispenseItem(dim, x, y, z int32, ds *dispenserState8) {
 			continue
 		}
 		name := g.itemNameOf777(it.ID)
+		// 朝向（facing 属性，默认 north=-z）
+		fx, fy, fz := facingVecOf(g.wd(dim).GetBlock(x, y, z))
 		if name == "arrow" {
-			// 射箭（-z 方向初速）
 			eid := g.nextEID.Add(1)
 			ar := &arrow{eid: eid, owner: -1, dim: dim,
-				x: float64(x) + 0.5, y: float64(y) + 0.5, z: float64(z) - 0.6,
-				vx: 0, vy: 0.02, vz: -1.2, dmg: 3}
+				x: float64(x) + 0.5 + fx*0.6, y: float64(y) + 0.5 + fy*0.6, z: float64(z) + 0.5 + fz*0.6,
+				vx: fx * 1.2, vy: fy*1.2 + 0.02, vz: fz * 1.2, dmg: 3}
 			ar.uuid = entityUUID(eid)
 			g.arrows[eid] = ar
 			for _, v := range g.chunkViewers(dim, x>>4, z>>4) {
 				typ := g.entityTypeID(v, "arrow")
 				eid2, xx, yy, zz := eid, ar.x, ar.y, ar.z
+				vvxx, vvyy, vvzz := int16(ar.vx*8000), int16(ar.vy*8000), int16(ar.vz*8000)
 				v.Send.SendPlay("minecraft:add_entity", func(w *protocol.Writer) {
 					packet.SpawnEntity{EntityID: eid2, UUID: ar.uuid, Type: typ,
-						X: xx, Y: yy, Z: zz, VZ: -9600}.Write(w)
+						X: xx, Y: yy, Z: zz, VX: vvxx, VY: vvyy, VZ: vvzz}.Write(w)
 				})
 			}
 			g.blockSound(dim, float64(x), float64(y), float64(z), "entity.arrow.shoot")
 		} else {
-			// 掉落前方
-			g.spawnItem(dim, float64(x)+0.5, float64(y)+0.4, float64(z)-0.8, it)
+			// 掉落朝向前方
+			g.spawnItem(dim, float64(x)+0.5+fx*0.8, float64(y)+0.4+fy*0.8, float64(z)+0.5+fz*0.8, it)
 		}
 		it.Count--
 		if it.Count <= 0 {
@@ -640,3 +656,24 @@ func (g *Game) loadShulkers() {
 
 var _ = assets.ItemIDs
 var _ = world.StateAir
+
+// facingVecOf 状态 facing 属性 → 单位向量（默认 north）。
+func facingVecOf(s uint32) (float64, float64, float64) {
+	full := fullStateNames[s]
+	switch {
+	case containsStr(full, "facing=south"):
+		return 0, 0, 1
+	case containsStr(full, "facing=west"):
+		return -1, 0, 0
+	case containsStr(full, "facing=east"):
+		return 1, 0, 0
+	case containsStr(full, "facing=up"):
+		return 0, 1, 0
+	case containsStr(full, "facing=down"):
+		return 0, -1, 0
+	default: // north
+		return 0, 0, -1
+	}
+}
+
+func containsStr(s, sub string) bool { return len(s) >= len(sub) && strings.Contains(s, sub) }

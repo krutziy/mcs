@@ -1030,3 +1030,113 @@ func TestAnvilMaterialRepairTake(t *testing.T) {
 		t.Fatal("材料修复应扣 1 级")
 	}
 }
+
+// TestPoweredRailBoost 动力轨：通电加速空车、未电刹车。
+func TestPoweredRailBoost(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	dim := p.Dim
+	ids := map[string]uint32{}
+	// 找动力轨 NS 未通电态
+	off := stateByFullName["minecraft:powered_rail[powered=false,shape=north_south,waterlogged=false]"]
+	on := stateByFullName["minecraft:powered_rail[powered=true,shape=north_south,waterlogged=false]"]
+	if off == 0 || on == 0 {
+		t.Fatal("动力轨状态资产缺失")
+	}
+	_ = ids
+	g.wd(dim).SetBlock(8, -61, 8, off)
+	// 未通电：慢速车被刹车
+	g.spawnMinecartAt(dim, 8.5, -60.94, 8.5, 0.3)
+	var mc *minecart
+	for _, c := range g.carts {
+		mc = c
+	}
+	mc.vz = 0.3
+	g.cartRailBoost(mc)
+	if mc.vz >= 0.3 {
+		t.Fatalf("未通电应刹车: %.2f", mc.vz)
+	}
+	// 通电：加速到 0.4
+	g.wd(dim).SetBlock(8, -61, 8, on)
+	mc.vz = 0.1
+	g.cartRailBoost(mc)
+	if mc.vz != 0.4 {
+		t.Fatalf("通电应加速至 0.4: %.2f", mc.vz)
+	}
+	// 静止车起步
+	g.wd(dim).SetBlock(8, -61, 8, on)
+	mc2 := mc
+	mc2.vz = 0
+	g.cartRailBoost(mc2)
+	if mc2.vz == 0 {
+		t.Fatal("通电动力轨上静止车应起步")
+	}
+}
+
+// TestDetectorRailSignal 探测轨：矿车驶上通电并作为红石源点亮灯。
+func TestDetectorRailSignal(t *testing.T) {
+	g, p, fs := newInteractGame(t)
+	dim := p.Dim
+	off := stateByFullName["minecraft:detector_rail[powered=false,shape=north_south,waterlogged=false]"]
+	if off == 0 {
+		t.Fatal("探测轨状态缺失")
+	}
+	g.wd(dim).SetBlock(8, -61, 8, off)
+	g.wd(dim).SetBlock(8, -61, 7, wireBase[0])
+	g.wd(dim).SetBlock(8, -61, 6, lampOff)
+	// 无车：灯灭
+	g.rsDirty = true
+	g.tick = 2
+	g.tickRedstone()
+	if g.wd(dim).GetBlock(8, -61, 6) == lampOn {
+		t.Fatal("无车探测轨不应通电")
+	}
+	// 放矿车上轨 → 探测轨 powered → 灯亮
+	g.spawnMinecartAt(dim, 8.5, -60.94, 8.5, 0)
+	g.tickDetectorRails()
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	if got := g.wd(dim).GetBlock(8, -61, 6); got != lampOn {
+		t.Fatalf("矿车驶上探测轨灯应亮: %d", got)
+	}
+	if !railPoweredProp(g.wd(dim).GetBlock(8, -61, 8)) {
+		t.Fatal("探测轨应 powered=true")
+	}
+	// 移走矿车 → 灯灭
+	for eid := range g.carts {
+		delete(g.carts, eid)
+	}
+	g.tickDetectorRails()
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	if g.wd(dim).GetBlock(8, -61, 6) == lampOn {
+		t.Fatal("车走后灯应灭")
+	}
+	_ = fs
+}
+
+// TestPoweredRailRedstoneFlip 动力轨 powered 随拉杆切换（红石重算路径）。
+func TestPoweredRailRedstoneFlip(t *testing.T) {
+	g, p, _ := newInteractGame(t)
+	dim := p.Dim
+	off := stateByFullName["minecraft:powered_rail[powered=false,shape=north_south,waterlogged=false]"]
+	g.wd(dim).SetBlock(8, -61, 8, off)
+	g.wd(dim).SetBlock(8, -62, 8, leverOff) // 轨下方拉杆
+	// 开拉杆 → 重算 → 动力轨 powered
+	g.toggleLever(p, packet.UseItemOn{X: 8, Y: -62, Z: 8, Face: 1, Sequence: 1})
+	g.rsDirty = true
+	g.tick = 2
+	g.tickRedstone()
+	if !railPoweredProp(g.wd(dim).GetBlock(8, -61, 8)) {
+		t.Fatal("拉杆通电后动力轨应 powered=true")
+	}
+	// 关拉杆 → 复位
+	g.toggleLever(p, packet.UseItemOn{X: 8, Y: -62, Z: 8, Face: 1, Sequence: 1})
+	g.rsDirty = true
+	g.tick += 2
+	g.tickRedstone()
+	if railPoweredProp(g.wd(dim).GetBlock(8, -61, 8)) {
+		t.Fatal("断电后动力轨应 powered=false")
+	}
+}

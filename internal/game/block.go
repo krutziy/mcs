@@ -391,6 +391,17 @@ func (g *Game) handlePlace(ev *blockPlaceEvent) {
 	if isRail(state) {
 		g.autoShapeRail(p.Dim, tx, ty, tz)
 	}
+	if held.Contents != nil && (g.blockNames[state] == "shulker_box" || containsStr(g.blockNames[state], "_shulker_box")) {
+		// 回填潜影盒内容（整盒放置保留物品）
+		key := [4]int32{p.Dim, tx, ty, tz}
+		ns := &shulkerState{}
+		copy(ns.slots[:], held.Contents)
+		g.shulkers[key] = ns
+	}
+	if isPoweredRail(state) || isDetectorRail(state) {
+		g.autoShapeSpecialRail(p.Dim, tx, ty, tz)
+		g.rsDirty = true // 立即按邻电定功率
+	}
 	bus.State, bus.ItemID = state, held.ID
 	g.scheduleRedstoneUpdate(p.Dim, tx, ty, tz)
 	g.scheduleObserverCheck(p.Dim, tx, ty, tz)
